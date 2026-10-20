@@ -62,12 +62,25 @@ def 主():
     for 模块 in ("拖放", "圆角", "设置窗口"):
         命令 += ["--hidden-import", 模块]
 
-    for 资源 in ("素材", "例子", "核.py", "核工坊.py", "说明.md"):
+    # 每个资源要写清「源路径;打进 exe 里的目标目录」。
+    # 注意：目标目录必须显式写出来。若用路径推导，对「素材」「例子」
+    # 这类顶层目录会得到空串并退化成 "."，整个 素材/ 被摊到根目录，
+    # exe 里便找不到 素材/核图标.png，图标与欢迎页会集体失效。
+    for 资源, 目标 in (
+        ("素材", "素材"),
+        ("例子", "例子"),
+        ("核.py", "."),
+        ("核工坊.py", "."),
+        ("设置窗口.py", "."),
+        ("拖放.py", "."),
+        ("圆角.py", "."),
+        ("说明.md", "."),
+    ):
         源 = os.path.join(根目录, 资源)
         if not os.path.exists(源):
             print("缺少资源：%s" % 源)
             return 1
-        命令 += ["--add-data", "%s;%s" % (源, os.path.dirname(资源) or ".")]
+        命令 += ["--add-data", "%s;%s" % (源, 目标)]
 
     命令.append(os.path.join(根目录, "启动器.py"))
 
@@ -82,8 +95,69 @@ def 主():
         大小 = os.path.getsize(产物) / 1024.0 / 1024.0
         print("\n打包完成：%s（%.1f MB）" % (产物, 大小))
         print("这个 exe 自带内核，目标机器不需要安装 Python。")
-    else:
-        print("\n打包完成，但没找到 dist/核工坊.exe，请检查输出。")
+        return 校验产物(产物, 根目录)
+    print("\n打包完成，但没找到 dist/核工坊.exe，请检查输出。")
+    return 0
+
+
+def 校验产物(产物, 根目录):
+    """让 exe 自己跑一次界面自检，确认资源真的打进去了。
+
+    这一步是血泪教训：曾经因为 --add-data 的目标目录写成 "."，
+    整个 素材/ 被摊平到根目录，exe 里找不到 素材/核图标.png，
+    标题栏图标与欢迎页图标集体消失，而外部截图看起来「像是旧界面」。
+    现在打包后立刻让 exe 自证，不通过就直接报错。
+    """
+    输出目录 = os.path.join(根目录, "dist", "打包自检")
+    shutil.rmtree(输出目录, ignore_errors=True)
+    print("\n正在让 exe 自检（验证资源是否完整）…")
+    try:
+        结果 = subprocess.run(
+            [产物, "--自检界面", 输出目录],
+            cwd=os.path.dirname(产物),
+            capture_output=True,
+            timeout=180,
+        )
+    except Exception as e:  # noqa: BLE001
+        print("自检没能运行：%s" % e)
+        return 1
+
+    报告路径 = os.path.join(输出目录, "自检报告.json")
+    if not os.path.exists(报告路径):
+        print("自检失败：没有生成报告。")
+        print((结果.stderr or b"").decode("utf-8", "replace")[-800:])
+        return 1
+
+    import json
+
+    with open(报告路径, encoding="utf-8") as f:
+        报告 = json.load(f)
+
+    问题 = []
+    if not 报告.get("图标PNG存在"):
+        问题.append("素材/核图标.png 没打进 exe（--add-data 目标目录写错）")
+    if not 报告.get("欢迎图"):
+        问题.append("欢迎页图标加载失败：%s" % 报告.get("欢迎失败原因", "原因未知"))
+    if 报告.get("工具栏") != ["运行", "停止", "保存", "打开", "设置"]:
+        问题.append("工具栏不对：%s" % 报告.get("工具栏"))
+    if 报告.get("左条") != ["项目", "对照表"]:
+        问题.append("左条按钮不对：%s" % 报告.get("左条"))
+    if not 报告.get("有设置对话框"):
+        问题.append("设置对话框没打进去")
+    项目目录 = str(报告.get("实际项目目录", ""))
+    if os.path.basename(项目目录).lower() == "dist":
+        问题.append("默认项目目录仍是 dist：%s" % 项目目录)
+
+    print("自检结果：")
+    for 键 in ("运行方式", "界面版本", "实际项目目录", "欢迎图", "图标PNG存在"):
+        print("  %-12s %s" % (键, 报告.get(键)))
+
+    if 问题:
+        print("\n自检不通过：")
+        for 项 in 问题:
+            print("  × %s" % 项)
+        return 1
+    print("\n自检通过，资源完整。")
     return 0
 
 

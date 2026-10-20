@@ -178,9 +178,44 @@ def _构造高亮式():
 # ---------------------------------------------------------------------------
 
 
+def 默认项目目录():
+    """启动时默认打开哪个目录当项目。
+
+    打包版不要用工作目录：用户双击 dist 里的 exe 时工作目录就是 dist，
+    项目树里只会孤零零一个 dist，看着像「界面没变」。优先用 exe 所在目录；
+    若该目录叫 dist（打包产物目录），改用它的上级，这样能看到源码与例子。
+    """
+    if getattr(sys, "frozen", False):
+        目录 = os.path.dirname(os.path.abspath(sys.executable))
+        if os.path.basename(目录).lower() in ("dist", "release", "build"):
+            父 = os.path.dirname(目录)
+            if os.path.isdir(父):
+                return 父
+        if os.path.isdir(目录):
+            return 目录
+    return os.getcwd()
+
+
+def 配置目录():
+    """配置应该存在一个「重启后还在」的地方。
+
+    打包成单文件后 sys._MEIPASS 是每次启动新建、退出即删的临时目录，
+    配置写进去下次运行就读不到了（改的主题、字号全会丢）。
+    所以打包版存到用户配置目录，源码版仍存在脚本目录，方便调试。
+    """
+    if getattr(sys, "frozen", False):
+        基 = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(基, "核工坊")
+    return 这里
+
+
+def 配置路径():
+    return os.path.join(配置目录(), "工坊配置.json")
+
+
 def 读配置():
     try:
-        with open(os.path.join(这里, "工坊配置.json"), "r", encoding="utf-8") as f:
+        with open(配置路径(), "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -188,7 +223,10 @@ def 读配置():
 
 def 存配置(配置):
     try:
-        with open(os.path.join(这里, "工坊配置.json"), "w", encoding="utf-8") as f:
+        目录 = 配置目录()
+        if not os.path.isdir(目录):
+            os.makedirs(目录, exist_ok=True)
+        with open(配置路径(), "w", encoding="utf-8") as f:
             json.dump(配置, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
@@ -257,10 +295,19 @@ _图标缓存 = {}
 
 
 def 缩放图标(根, 边长):
-    """按目标边长缩放项目图标；超出 tkinter 缩放能力时用 PIL，最后退回 subsample。"""
-    键 = (id(根), 边长)
-    if 键 in _图标缓存:
-        return _图标缓存[键]
+    """按目标边长缩放项目图标；超出 tkinter 缩放能力时用 PIL，最后退回 subsample。
+
+    缓存挂在根窗口自己的属性上（_图标缓存表），不用 id(根) 做键：
+    id 会在对象回收后被复用，且缓存放模块级全局时，窗口销毁后
+    PhotoImage 会失效或误删，打包版曾因此丢过欢迎页图标。
+    """
+    表 = getattr(根, "_图标缓存表", None)
+    if 表 is None:
+        表 = {}
+        根._图标缓存表 = 表  # 由根窗口持有引用，窗口在则图在
+    if 边长 in 表:
+        return 表[边长]
+
     原图 = None
     try:
         from PIL import Image, ImageTk
@@ -279,11 +326,7 @@ def 缩放图标(根, 边长):
             原图 = 基
         except tk.TclError:
             原图 = None
-    # 只保留最近一个根窗口的缓存，避免窗口反复开关时无限增长
-    当前根 = id(根)
-    for 旧键 in [k for k in _图标缓存 if k[0] != 当前根]:
-        del _图标缓存[旧键]
-    _图标缓存[键] = 原图
+    表[边长] = 原图
     return 原图
 
 
@@ -296,16 +339,15 @@ def 界面图标尺寸(根, 逻辑边长):
     return 缩放图标(根, int(round(逻辑边长 * 倍)))
 
 
-def 设窗口图标(根):
+def 设窗口图标(根, 尝试=0):
     """把语言图标设成标题栏/任务栏图标。
 
-    必须在窗口真正显示之后再调用：窗口还处于 withdraw 状态时设置，
-    Tk 会在重新映射时丢掉，标题栏会一直显示 Tk 默认的羽毛图标。
-    同时设 iconphoto（PNG）与 iconbitmap（ICO），兼容不同 Windows 版本。
+    必须在窗口真正显示之后再调用：窗口处于 withdraw 状态时设置，
+    Tk 在重新映射时会丢掉。窗口初始化过程中会被重新映射多次
+    （pack 布局变化、PanedWindow 首次排布、分栏调整），因此这里
+    安排几次重试，确保最终标题栏用的是我们的图标。
     """
-    if getattr(根, "_图标已设", False):
-        return
-    # iconphoto：跨平台且对任务栏生效
+    成功 = False
     for 尺寸 in (16, 32, 48, 64, 128, 256):
         路径 = os.path.join(图标目录, "核图标_%d.png" % 尺寸)
         if not os.path.exists(路径):
@@ -313,16 +355,26 @@ def 设窗口图标(根):
         try:
             图 = tk.PhotoImage(file=路径, master=根)
             根.iconphoto(True, 图)
-            根._图标缓存 = 图  # 防止被回收
+            根._图标图 = 图  # 必须持有引用，否则会被回收
+            成功 = True
             break
         except tk.TclError:
             continue
     if os.path.exists(图标ICO):
         try:
             根.iconbitmap(default=图标ICO)
+            成功 = True
         except (tk.TclError, OSError):
             pass
-    根._图标已设 = True
+
+    根._图标已设 = 成功
+    if 成功 and 尝试 < 4:
+        # 布局仍在变化时图标可能被重置，隔一段时间再设一遍
+        try:
+            根.after(200 + 尝试 * 300, lambda: 设窗口图标(根, 尝试 + 1))
+        except tk.TclError:
+            pass
+    return 成功
 
 
 class 圆角按钮(tk.Canvas):
@@ -880,13 +932,16 @@ class 主窗口:
         self.显示项目树 = bool(self.配置.get("项目树", True))
         self.显示对照表 = bool(self.配置.get("对照表", False))
         self.显示缩进线 = bool(self.配置.get("缩进线", True))
-        self.项目目录 = self.配置.get("项目目录") or os.getcwd()
+        # 双击 exe 时工作目录是 dist（exe 所在处），拿它当项目目录只会看到 dist。
+        # 打包版默认落到 exe 所在目录，源码版仍用工作目录。
+        self.项目目录 = self.配置.get("项目目录") or 默认项目目录()
         self.最近 = self.配置.get("最近", [])
         self.文档集 = []
         self.当前 = None
         self.进程 = None
         self.输出队列 = queue.Queue()
         self.运行标记 = 0
+        self._读线程 = None
         self.查找窗 = None
         self._高亮任务 = None
         self._轮询任务 = None
@@ -954,6 +1009,7 @@ class 主窗口:
     def 销毁(self):
         """清理定时任务与子进程后销毁窗口（供测试/脚本安全关闭）。"""
         self._已退出 = True
+        self._读线程 = None
         for 名 in ("_缩放任务", "_高亮任务", "_轮询任务"):
             任务 = getattr(self, 名, None)
             if 任务:
@@ -1831,6 +1887,10 @@ class 主窗口:
         self.主题 = 主题集.get(名, 深色)
         self.应用主题()
         self._填对照表()
+        # 窗口圆角与标题栏染色只在启动时做过一次，切主题后必须重做，
+        # 否则浅色主题下标题栏仍是深色，看着像「主题没生效」。
+        self._应用窗口圆角()
+        设窗口图标(self.根)
         self.状态("已切换到%s主题" % self.主题["名"])
         self.存配置()
 
@@ -2514,12 +2574,18 @@ class 主窗口:
             不能用 readline / read：提示语（如「请输入：」）常常不带换行，
             阻塞读会一直等到换行或进程结束，界面看起来就像卡死了。
             这里把管道设成非阻塞，小步轮询，读到什么就先送上界面。
+
+            注意：进程刚结束时，输出可能**还留在管道缓冲区里**没被取走。
+            若一读到空就退出，这些内容会永久丢失（表现为「控制台只显示
+            程序结束，看不到程序打印的结果」）。所以进程退出后要把管道
+            读干净，确认连续读到空才收工。
             """
             try:
                 os.set_blocking(进程对象.stdout.fileno(), False)
             except (AttributeError, OSError, ValueError):
                 pass
             缓冲 = b""
+            空读次数 = 0
             try:
                 while True:
                     块 = b""
@@ -2531,13 +2597,19 @@ class 主窗口:
                         break
                     if 块:
                         缓冲 += 块
+                        空读次数 = 0
                         continue
-                    if 缓冲:
+                    空读次数 += 1
+                    已结束 = 进程对象.poll() is not None
+                    # 进程还在跑：有缓冲就先送出去，然后继续等
+                    # 进程已结束：把管道读到连续多次为空，确保不丢尾部输出
+                    if 缓冲 and (not 已结束 or 空读次数 > 1):
                         self.输出队列.put((标记, 缓冲))
                         缓冲 = b""
-                    if 进程对象.poll() is not None:
+                    if 已结束 and 空读次数 >= 3:
                         break
-                    time.sleep(0.03)
+                    if not 已结束:
+                        time.sleep(0.03)
             finally:
                 if 缓冲:
                     self.输出队列.put((标记, 缓冲))
@@ -2546,26 +2618,44 @@ class 主窗口:
 
         线程 = threading.Thread(target=读, args=(self.进程,), daemon=True)
         线程.start()
+        self._读线程 = 线程
 
     def _轮询输出(self):
         if getattr(self, "_已退出", False):
             return
-        try:
+
+        def 收队列():
+            """把队列里属于本轮的输出全部追加到控制台，返回取到的块数。"""
+            数量 = 0
             while True:
-                标记, 块 = self.输出队列.get_nowait()
+                try:
+                    标记, 块 = self.输出队列.get_nowait()
+                except queue.Empty:
+                    break
                 if 块 is None:
+                    数量 += 1
                     continue
                 if 标记 != self.运行标记:
                     continue
-                文本 = 块.decode("utf-8", "replace")
-                self.控制台追加(文本)
-        except queue.Empty:
-            pass
+                self.控制台追加(块.decode("utf-8", "replace"))
+                数量 += 1
+            return 数量
+
+        收队列()
         进程 = self.进程
         if 进程 is not None and 进程.poll() is not None:
+            # 进程刚结束，读线程可能还差最后一块没放进队列（竞态）。
+            # 若在这里直接收尾，那段输出就永远丢了 —— 表现为
+            # 「控制台只有『程序结束』，看不到程序打印的内容」。
+            # 给读线程一点时间把缓冲与结束标记送进来，再补齐一次队列。
+            收 = getattr(self, "_读线程", None)
+            if 收 is not None and 收.is_alive():
+                收.join(timeout=1.5)
+            收队列()
             码 = 进程.returncode
             self._收尾进程(进程)
             self.进程 = None
+            self._读线程 = None
             self.输入框.configure(state="disabled")
             if hasattr(self, "输入提示"):
                 self.输入提示.configure(text="输入", fg=self.主题["次要文本"])

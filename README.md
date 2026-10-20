@@ -184,6 +184,21 @@ python 测试/界面自测.py    # 界面 62 项
 | --- | --- |
 | 0.0.1 | 首个版本：内核、命令行、核工坊界面、拖放、打包 |
 
+### 发布一个版本
+
+```bash
+python 测试/归档版本.py          # 归档源码快照到 版本/vX.Y.Z/
+python 测试/打包.py              # 出 exe，并自动跑界面自检
+python 测试/发布Release.py       # 建 Release 并把 exe 作为附件上传
+```
+
+发布脚本需要 Personal Access Token（`Contents: Read and write`），
+从环境变量 `GH_TOKEN` 读取。SSH 密钥只能 push 代码，**不能**上传 Release 附件。
+上传后会复查页面附件列表，确认 exe 真的在。
+
+下载页：<https://github.com/xiaohetaoo/he-language/releases>
+
+
 ---
 
 ## 已知限制

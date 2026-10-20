@@ -6,8 +6,10 @@
 """
 
 import os
+import sys
 import tkinter as tk
 
+import 核工坊
 from 圆角 import 圆角矩形
 
 界面字体 = ("Microsoft YaHei UI", 9)
@@ -63,6 +65,20 @@ class 设置窗口(tk.Toplevel):
 
     def 协议(self):
         self.protocol("WM_DELETE_WINDOW", self.取消)
+
+    def 销毁(self):
+        """清理内部菜单等资源后销毁，避免留下 Tcl 命令引用。"""
+        try:
+            for 子 in self.winfo_children():
+                try:
+                    子.destroy()
+                except Exception:
+                    pass
+        finally:
+            try:
+                super().destroy()
+            except Exception:
+                pass
 
     def _居中(self):
         self.update_idletasks()
@@ -479,6 +495,36 @@ class 设置窗口(tk.Toplevel):
             ).pack(side="left")
             tk.Label(
                 行, text=str(值), bg=主题["窗口"], fg=主题["文本"], font=界面字体, anchor="w"
+            ).pack(side="left")
+
+        # 构建信息：用来区分手上跑的是哪一份产物（源码版还是某个 exe）
+        import time as 时间
+
+        打包 = bool(getattr(sys, "frozen", False))
+        目标 = sys.executable if 打包 else 核工坊.__file__
+        try:
+            构建 = 时间.strftime(
+                "%Y-%m-%d %H:%M", 时间.localtime(os.path.getmtime(目标))
+            )
+        except OSError:
+            构建 = "未知"
+        方式 = "打包 exe" if 打包 else "源码"
+        tk.Label(
+            self.内容,
+            text="构建信息",
+            bg=主题["窗口"],
+            fg=主题["次要文本"],
+            font=("Microsoft YaHei UI", 9, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(14, 2))
+        for 名, 值 in (("运行方式", 方式), ("构建时间", 构建), ("界面版本", 内核.版本)):
+            行 = tk.Frame(self.内容, bg=主题["窗口"])
+            行.pack(fill="x", pady=1)
+            tk.Label(
+                行, text=名, bg=主题["窗口"], fg=主题["次要文本"], font=界面字体, anchor="w", width=12
+            ).pack(side="left")
+            tk.Label(
+                行, text=值, bg=主题["窗口"], fg=主题["文本"], font=界面字体, anchor="w"
             ).pack(side="left")
 
         tk.Label(
