@@ -23,7 +23,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.1"
+版本 = "0.0.2"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -1056,6 +1056,19 @@ def 命令行(argv):
             k = argv.index("-o")
             if k + 1 < len(argv):
                 输出 = argv[k + 1]
+            else:
+                print("-o 后面要跟输出文件路径", file=sys.stderr)
+                return 2
+        elif len(argv) > 2:
+            # 常见误用：把输出路径直接当第二个参数写。
+            # 直接忽略会让人以为「写了文件却没生成」，这里给个明确提示。
+            多余 = argv[2]
+            print(
+                "提示：要写出到文件请用 -o，例如 核 转译 %s -o %s"
+                % (argv[1], 多余),
+                file=sys.stderr,
+            )
+            print("（当前仍只把结果打印到屏幕）", file=sys.stderr)
         return 转译文件(argv[1], 输出)
 
     if 首 in ("报告", "report"):

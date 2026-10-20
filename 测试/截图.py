@@ -89,6 +89,21 @@ def _抓(句柄, 输出, 边距=40, 根=None):
         wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
         ctypes.c_int, ctypes.c_int, ctypes.c_uint,
     ]
+    u.GetParent.argtypes = [wintypes.HWND]
+    u.GetParent.restype = wintypes.HWND
+
+    # 先最小化再还原：这样窗口会回到 Z 序最前，旁边不会露出别的窗口
+    # （曾出现截图左边缘混进一条别人的窗口）。
+    if 根 is not None:
+        try:
+            根.iconify()
+            根.update()
+            time.sleep(0.3)
+            根.deiconify()
+            根.update()
+        except Exception:  # noqa: BLE001
+            pass
+
     宽, 高 = _窗口大小(句柄)
 
     for _ in range(8):
@@ -110,6 +125,24 @@ def _抓(句柄, 输出, 边距=40, 根=None):
         if r.left <= 2 and r.top <= 2:
             break
     time.sleep(0.9)
+
+    # 尺寸必须等到稳定再取：切主题/建控件会让窗口短时间内缩到最小尺寸，
+    # 若沿用开头的旧值或就着当时的尺寸裁剪，会截出 237x39 这种碎片。
+    上次 = (宽, 高)
+    稳定 = 0
+    for _ in range(60):
+        r = wintypes.RECT()
+        u.GetWindowRect(句柄, ctypes.byref(r))
+        现在 = (r.right - r.left, r.bottom - r.top)
+        if 现在 == 上次 and 现在[0] > 400 and 现在[1] > 300:
+            稳定 += 1
+            if 稳定 >= 3:
+                break
+        else:
+            稳定 = 0
+        上次 = 现在
+        time.sleep(0.05)
+    宽, 高 = 上次
 
     r = wintypes.RECT()
     u.GetWindowRect(句柄, ctypes.byref(r))

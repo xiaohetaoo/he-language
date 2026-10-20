@@ -20,7 +20,18 @@ import sys
 扩展名 = ".xht"
 图标 = os.path.join(根目录, "素材", "核图标.ico")
 描述 = "核语言源文件"
-打开命令 = '"%s" "%%1"' % os.path.join(根目录, "核工坊.cmd")
+
+
+def _打开程序():
+    """优先用打包好的 exe（目标机器无需 Python），否则退回 .cmd。"""
+    exe = os.path.join(根目录, "dist", "核工坊.exe")
+    if os.path.exists(exe):
+        return '"%s" "%%1"' % exe, exe
+    cmd = os.path.join(根目录, "核工坊.cmd")
+    return '"%s" "%%1"' % cmd, cmd
+
+
+打开命令, _所用程序 = _打开程序()
 
 
 def _运行(命令):
@@ -57,7 +68,8 @@ def 注册():
     if 失败:
         return 1
     print("已关联 %s → %s" % (扩展名, 描述))
-    print("双击 .xht 文件会用 核工坊 打开；图标取自 素材/核图标.ico。")
+    print("双击 .xht 文件会用这个程序打开：%s" % _所用程序)
+    print("图标取自 素材/核图标.ico。")
     print("如果资源管理器没刷新，注销再登录，或执行：ie4uinit.exe -show")
     _运行(["ie4uinit.exe", "-show"])
     return 0

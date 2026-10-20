@@ -96,6 +96,28 @@ def _自检界面(参数):
         根.update()
         time.sleep(0.02)
 
+    # --截图 模式：打开示例文件并运行，好让文档配图里有真实内容。
+    # 窗口自己截图，不受其它窗口遮挡影响。
+    if "--截图" in 参数:
+        样例 = os.path.join(核工坊.这里, "例子", "03_容器与函数.xht")
+        if os.path.exists(样例):
+            窗口.对照变量.set(True)
+            窗口._显示对照表()
+            窗口.打开(样例)
+            for _ in range(30):
+                根.update()
+                time.sleep(0.02)
+            窗口.运行()
+            截止 = time.time() + 12
+            while time.time() < 截止:
+                根.update()
+                time.sleep(0.02)
+                if 窗口.进程 is None:
+                    break
+            for _ in range(20):
+                根.update()
+                time.sleep(0.03)
+
     # 若欢迎图缺失，直接把失败原因记进报告，便于定位（打包后没有控制台可看）
     欢迎失败 = ""
     if getattr(窗口, "欢迎图", None) is None:
@@ -191,11 +213,18 @@ def _截自己(窗口, 输出):
 
         from PIL import Image
 
+        # 两种抓法都试：桌面抓取对主题切换最即时，但多显示器/DPI 缩放下
+        # 坐标会偏；PrintWindow 坐标准，但拿的是窗口缓存。
+        # 先强制重绘，再用 PrintWindow 取完整窗口内容，拿到的就是当前配色。
+        根.update_idletasks()
+        根.update()
+        time.sleep(0.25)
+
         屏幕 = u.GetWindowDC(句柄)
         内存 = ctypes.windll.gdi32.CreateCompatibleDC(屏幕)
         位图 = ctypes.windll.gdi32.CreateCompatibleBitmap(屏幕, 宽, 高)
         ctypes.windll.gdi32.SelectObject(内存, 位图)
-        u.PrintWindow(句柄, 内存, 2)
+        u.PrintWindow(句柄, 内存, 2)  # PW_RENDERFULLCONTENT
 
         class 头(ctypes.Structure):
             _fields_ = [
@@ -218,6 +247,12 @@ def _截自己(窗口, 输出):
         Image.frombuffer(
             "RGBA", (宽, 高), 缓冲, "raw", "BGRA", 0, 1
         ).convert("RGB").save(输出)
+
+        ctypes.windll.gdi32.DeleteObject(位图)
+        ctypes.windll.gdi32.DeleteDC(内存)
+        u.ReleaseDC(句柄, 屏幕)
+        根.attributes("-topmost", False)
+        return {"路径": 输出, "宽": 宽, "高": 高}
         根.attributes("-topmost", False)
         return {"路径": 输出, "宽": 宽, "高": 高}
     except Exception as e:  # noqa: BLE001
@@ -249,6 +284,21 @@ def _自检拖放():
         根.update()
         time.sleep(0.02)
 
+    # 拖放是延迟注册的（窗口句柄要等布局稳定）；这里等到确实注册上再发消息，
+    # 否则会误判成「拖放失效」。
+    import 拖放 as _拖放
+
+    for _ in range(150):
+        根.update()
+        if getattr(窗口, "_拖放就绪", False) or _拖放._已启用:
+            break
+        time.sleep(0.02)
+    根.update()
+    if not _拖放._已启用:
+        print("拖放自检：失败（窗口过程未注册）")
+        根.destroy()
+        return 1
+
     目标 = sys.argv[2] if len(sys.argv) > 2 else os.path.join(基目录(), "例子", "02_条件与循环.xht")
 
     u = ctypes.WinDLL("user32")
@@ -267,7 +317,24 @@ def _自检拖放():
     指针 = k.GlobalLock(句柄)
     ctypes.memmove(指针, 块, len(块))
 
+    # 用一个「尚未打开」的文件来验证：若拿已打开的文件发拖放消息，
+    # 打开逻辑会复用现有标签、文档数不变，看起来像拖放失败。
     前 = len(窗口.文档集)
+    已打开路径 = {os.path.normcase(os.path.abspath(d.文件路径)) for d in 窗口.文档集 if d.文件路径}
+    if os.path.normcase(os.path.abspath(目标)) in 已打开路径:
+        另存 = os.path.join(os.path.dirname(os.path.abspath(目标)),
+                            "拖放自检_另一个.xht")
+        try:
+            with open(另存, "w", encoding="utf-8") as f:
+                f.write('核说（"拖放自检"）\n')
+            目标 = 另存
+        except OSError:
+            pass
+        # 造完新文件要重新打包 DROPFILES
+        块 = 头.raw + 目标.encode("utf-16-le") + b"\x00\x00"
+        句柄 = k.GlobalAlloc(0x0042, len(块))
+        指针 = k.GlobalLock(句柄)
+        ctypes.memmove(指针, 块, len(块))
     u.SendMessageW(u.GetParent(根.winfo_id()), 0x0233, wintypes.WPARAM(句柄), 0)
     for _ in range(200):
         根.update()

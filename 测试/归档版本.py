@@ -30,13 +30,23 @@ import 核  # noqa: E402
 资源目录 = ("例子", "素材")
 
 
-def 归档():
+def 归档(覆盖=False):
     版本 = 核.版本
     目标 = os.path.join(版本根, "v%s" % 版本)
     if os.path.exists(目标):
-        print("版本 v%s 已存在：%s" % (版本, 目标))
-        print("如需重新归档，请先删除该目录，或提升 核.py 里的版本号。")
-        return 1
+        if not 覆盖:
+            print("版本 v%s 已存在：%s" % (版本, 目标))
+            print("如需重新归档（例如同一版本号内还在修 bug），加 --覆盖。")
+            return 1
+        # 覆盖前把旧的挪到 _旧_ 备份，避免手滑丢掉上一版内容
+        备份 = os.path.join(版本根, "_旧_v%s" % 版本)
+        shutil.rmtree(备份, ignore_errors=True)
+        try:
+            os.rename(目标, 备份)
+            print("已把原 v%s 备份到 %s" % (版本, os.path.basename(备份)))
+        except OSError as e:
+            print("无法备份旧版本（%s），已中止，未做改动。" % e)
+            return 1
 
     os.makedirs(目标, exist_ok=True)
     复制 = []
@@ -101,4 +111,4 @@ def 列表():
 if __name__ == "__main__":
     if "--列表" in sys.argv:
         sys.exit(列表())
-    sys.exit(归档())
+    sys.exit(归档(覆盖="--覆盖" in sys.argv))

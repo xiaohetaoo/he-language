@@ -142,7 +142,30 @@ def 启用拖放(根窗口, 回调, 失败提示=None):
             失败提示("拖放不可用：%s" % e)
         return False
 
+    # 只保留当前这个窗口的状态：这些容器是模块级的，窗口反复开关会一直累积
+    释放拖放(全部=True)
     _原过程[句柄] = ctypes.cast(原, ctypes.c_void_p) if 原 else None
     _回调引用.append(新过程)
     _已启用.add(句柄)
     return True
+
+
+def 释放拖放(根窗口=None, 全部=False):
+    """窗口销毁时调用，清掉拖放相关引用，避免模块级容器无限增长。"""
+    global _回调引用
+    if 全部:
+        _原过程.clear()
+        _已启用.clear()
+        _回调引用 = []
+        return
+    if 根窗口 is None or not 可用:
+        return
+    try:
+        user32 = ctypes.WinDLL("user32")
+        user32.GetParent.argtypes = [wintypes.HWND]
+        user32.GetParent.restype = wintypes.HWND
+        句柄 = user32.GetParent(根窗口.winfo_id()) or 根窗口.winfo_id()
+    except Exception:  # noqa: BLE001
+        return
+    _原过程.pop(句柄, None)
+    _已启用.discard(句柄)

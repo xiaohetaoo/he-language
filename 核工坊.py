@@ -46,16 +46,17 @@ import 圆角  # noqa: E402
 
 深色 = {
     "名": "深色",
-    # 层次：窗口 < 编辑器 < 面板；避免一片同色
-    "窗口": "#1e1f22",
-    "编辑器": "#1e1f22",
-    "面板": "#2b2d30",
-    "面板2": "#26282b",
-    "边框": "#393b40",
+    # 层次：只留两档明暗（编辑器/面板），差值收窄到 6 左右。
+    # 之前窗口→编辑器→面板→面板2 跨了四级，拖动分栏时像一层层叠起来的板子。
+    "窗口": "#232427",
+    "编辑器": "#202124",
+    "面板": "#26272b",
+    "面板2": "#25262a",
+    "边框": "#34363b",
     "文本": "#dfe1e5",
     "次要文本": "#9da0a8",
-    "行号底": "#1e1f22",
-    "行号字": "#5c6068",
+    "行号底": "#202124",
+    "行号字": "#8a8f98",
     "当前行": "#23252a",
     "选区": "#2f5d9e",
     "光标": "#dfe1e5",
@@ -64,28 +65,28 @@ import 圆角  # noqa: E402
     "方法": "#d5b778",
     "字符串": "#6aab73",
     "数字": "#2aacb8",
-    "注释": "#7a7e85",
+    "注释": "#8f949c",
     "函数名": "#56a8f5",
-    "控制台底": "#1e1f22",
+    "控制台底": "#202124",
     "控制台字": "#c8cad0",
     "错误": "#f75464",
     "输入": "#6aab73",
-    "命令": "#7a7e85",
-    "按钮": "#393b40",
-    "按钮热": "#43454a",
+    "命令": "#8f949c",
+    "按钮": "#34363b",
+    "按钮热": "#3e4046",
     "选中行": "#2e436e",
     "标签未选": "#2b2d30",
     "强调": "#56a8f5",
-    "标题栏": "#2b2d30",
-    "工具条": "#2b2d30",
-    "工具条热": "#393b40",
-    "工具条选中": "#393b40",
+    "标题栏": "#26272b",
+    "工具条": "#26272b",
+    "工具条热": "#34363b",
+    "工具条选中": "#34363b",
     "缩进线": "#34373c",
     "面包屑": "#1e1f22",
-    "面包屑字": "#8b8f96",
+    "面包屑字": "#a6abb4",
     "标签选中底线": "#56a8f5",
-    "运行条": "#1e1f22",
-    "状态栏": "#2b2d30",
+    "运行条": "#202124",
+    "状态栏": "#26272b",
     "分组标题": "#c9ccd3",
     "圆角": 10,
     "圆角小": 6,
@@ -95,14 +96,14 @@ import 圆角  # noqa: E402
 浅色 = {
     "名": "浅色",
     "窗口": "#eceef1",
-    "编辑器": "#ffffff",
-    "面板": "#f7f8fa",
-    "面板2": "#f2f4f6",
+    "编辑器": "#fbfcfd",
+    "面板": "#f4f6f8",
+    "面板2": "#f1f3f6",
     "边框": "#d6dae0",
     "文本": "#1f2329",
-    "次要文本": "#6b7280",
+    "次要文本": "#5f6672",
     "行号底": "#f7f8fa",
-    "行号字": "#a0a5ad",
+    "行号字": "#6e747d",
     "当前行": "#f2f6fc",
     "选区": "#cfe2ff",
     "光标": "#1f2329",
@@ -111,13 +112,13 @@ import 圆角  # noqa: E402
     "方法": "#8a6d00",
     "字符串": "#067d17",
     "数字": "#1750eb",
-    "注释": "#9aa0a6",
+    "注释": "#6d737b",
     "函数名": "#005fab",
     "控制台底": "#ffffff",
     "控制台字": "#3a3f45",
     "错误": "#c7221f",
     "输入": "#067d17",
-    "命令": "#9aa0a6",
+    "命令": "#6d737b",
     "按钮": "#e6e9ed",
     "按钮热": "#d8dce2",
     "选中行": "#d5e5ff",
@@ -129,7 +130,7 @@ import 圆角  # noqa: E402
     "工具条选中": "#e6e9ed",
     "缩进线": "#e3e6ea",
     "面包屑": "#ffffff",
-    "面包屑字": "#7a8087",
+    "面包屑字": "#60666e",
     "标签选中底线": "#3574f0",
     "运行条": "#ffffff",
     "状态栏": "#f7f8fa",
@@ -498,7 +499,19 @@ class 编辑器(tk.Frame):
         )
         self.行号画布.pack(side="left", fill="y")
 
-        self.滚动 = ttk.Scrollbar(self, orient="vertical")
+        # 用经典 tk.Scrollbar 而不是 ttk.Scrollbar：
+        # clam 主题下 ttk 滚动条的滑块会被系统画成深色，浅色主题里会留一条
+        # 黑柱，且很难用 Style 覆盖干净。经典滚动条直接吃 bg/troughcolor。
+        self.滚动 = tk.Scrollbar(
+            self,
+            orient="vertical",
+            bg=主窗.主题["按钮"],
+            troughcolor=主窗.主题["窗口"],
+            activebackground=主窗.主题["按钮热"],
+            bd=0,
+            relief="flat",
+            width=12,
+        )
         self.滚动.pack(side="right", fill="y")
 
         self.文本 = tk.Text(
@@ -525,7 +538,16 @@ class 编辑器(tk.Frame):
         self.文本.pack(side="left", fill="both", expand=True)
         self.滚动.configure(command=self._滚动)
         self.文本.configure(yscrollcommand=self._同步滚动)
-        self.横向滚动 = ttk.Scrollbar(self, orient="horizontal")
+        self.横向滚动 = tk.Scrollbar(
+            self,
+            orient="horizontal",
+            bg=主窗.主题["按钮"],
+            troughcolor=主窗.主题["窗口"],
+            activebackground=主窗.主题["按钮热"],
+            bd=0,
+            relief="flat",
+            width=12,
+        )
         self.横向滚动.pack(side="bottom", fill="x")
         self.横向滚动.configure(command=self.文本.xview)
         self.文本.configure(xscrollcommand=self.横向滚动.set)
@@ -729,6 +751,17 @@ class 编辑器(tk.Frame):
         return int(self.文本.index("end-1c").split(".")[0])
 
     def 换主题(self):
+        主题 = self.主窗.主题
+        self.configure(bg=主题["编辑器"])
+        for 滚动条, 槽色 in ((self.滚动, 主题["窗口"]), (self.横向滚动, 主题["窗口"])):
+            try:
+                滚动条.configure(
+                    bg=主题["按钮"],
+                    troughcolor=槽色,
+                    activebackground=主题["按钮热"],
+                )
+            except tk.TclError:
+                pass
         self._配置标签()
         self.主窗.高亮(self)
         self._画行号()
@@ -944,6 +977,7 @@ class 主窗口:
         self._读线程 = None
         self.查找窗 = None
         self._高亮任务 = None
+        self._高亮文档 = None
         self._轮询任务 = None
         self._缩放任务 = None
         self._已退出 = False
@@ -958,7 +992,10 @@ class 主窗口:
         self._初始打开()
         self.根.after(60, self._定分栏)
         self.根.after(400, self._定分栏)
-        self.根.after(80, self._启用拖放)
+        # 拖放立刻启用：以前排在 after(80)，窗口刚开的那一小会儿拖入是没反应的，
+        # 用户会觉得「拖进去没动静」。这里先立即启用，再补一次，防止句柄尚未就绪。
+        self.根.after(10, self._启用拖放)
+        self.根.after(300, self._启用拖放)
         self.根.after(40, self._应用窗口圆角)
         # 图标必须在窗口真正显示之后再设，否则会被 Tk 丢掉
         self.根.after(10, lambda: 设窗口图标(self.根))
@@ -984,12 +1021,25 @@ class 主窗口:
         except ImportError:
             return
         结果 = 拖放.启用拖放(self.根, self._处理拖入)
+        self._拖放就绪 = bool(结果)
         if 结果:
             self.状态("提示：可以把 .xht 文件直接拖进窗口打开")
 
     def _处理拖入(self, 路径集):
         """处理拖入的路径：目录→设为项目，.xht→打开，其它→提示。"""
+        # 拖入时窗口常被别的窗口盖住，用户看不到任何变化，会以为「拖了没反应」。
+        # 所以先把窗口提到前面，再处理。
+        try:
+            self.根.deiconify()
+            self.根.lift()
+            self.根.attributes("-topmost", True)
+            self.根.after(120, lambda: self.根.attributes("-topmost", False))
+            self.根.focus_force()
+        except tk.TclError:
+            pass
+
         已开 = 0
+        首个错误 = ""
         for 路径 in 路径集:
             if os.path.isdir(路径):
                 self.项目目录 = 规范化路径(路径)
@@ -999,17 +1049,41 @@ class 主窗口:
             elif 路径.lower().endswith(内核.扩展名):
                 if self.打开(路径):
                     已开 += 1
+                else:
+                    首个错误 = 首个错误 or os.path.basename(路径)
             else:
                 self.状态("只能打开 %s 文件，已忽略：%s" % (内核.扩展名, os.path.basename(路径)))
         if 已开:
             self.状态("已打开 %d 个文件" % 已开)
-            self.根.deiconify()
-            self.根.lift()
+        elif 首个错误:
+            self.状态("打开失败：%s" % 首个错误)
+
+    def _终止子进程(self):
+        """杀掉正在运行的子进程，并等读线程收工后关闭管道。
+
+        顺序很重要：必须先等读线程结束，再关管道。
+        反过来的话，读线程会在已关闭的管道上读取，异常与残留输出
+        会穿插到「已停止」之类的提示后面。
+        """
+        进程 = self.进程
+        if 进程 is None:
+            return False
+        if 进程.poll() is None:
+            try:
+                进程.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        收 = getattr(self, "_读线程", None)
+        if 收 is not None and 收.is_alive():
+            收.join(timeout=1.0)
+        self._收尾进程(进程)
+        self.进程 = None
+        self._读线程 = None
+        return True
 
     def 销毁(self):
         """清理定时任务与子进程后销毁窗口（供测试/脚本安全关闭）。"""
         self._已退出 = True
-        self._读线程 = None
         for 名 in ("_缩放任务", "_高亮任务", "_轮询任务"):
             任务 = getattr(self, 名, None)
             if 任务:
@@ -1018,13 +1092,14 @@ class 主窗口:
                 except (tk.TclError, ValueError):
                     pass
                 setattr(self, 名, None)
-        if self.进程 is not None and self.进程.poll() is None:
-            try:
-                self.进程.kill()
-            except OSError:
-                pass
-            self._收尾进程(self.进程)
-            self.进程 = None
+        self._终止子进程()
+        self._丢弃队列()
+        try:
+            import 拖放 as _拖放
+
+            _拖放.释放拖放(self.根)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.根.destroy()
         except tk.TclError:
@@ -1181,47 +1256,55 @@ class 主窗口:
     # —— 顶部：集成式标题栏 + 工具条 + 左侧竖排 → 严格模仿 PyCharm 新 UI ——
 
     def _建标题栏(self):
-        """最上面一条：应用标 + 项目名 + 面包屑；右侧窗口按钮由系统绘制。"""
+        """顶部条：应用标 + 菜单按钮 + 搜索框。
+
+        标题、窗口按钮、图标都交给 Windows 原生标题栏（见 _应用窗口圆角），
+        这里不再重复显示「核工坊 v…」——以前两条并排，既重复又显得挤。
+        """
         主题 = self.主题
-        self.标题栏 = 条 = tk.Frame(self.根, bg=主题["标题栏"], height=32)
+        self.标题栏 = 条 = tk.Frame(self.根, bg=主题["标题栏"], height=38)
         条.pack(side="top", fill="x")
         条.pack_propagate(False)
 
-        self.品牌图 = tk.Label(条, image=self.图标["品牌"] if self.图标["品牌"] else None,
-                             bg=主题["标题栏"], bd=0)
-        if self.图标["品牌"] is None:
-            self.品牌图.configure(text="核", fg=主题["错色"] if "错色" in 主题 else "#e8e8e8",
-                                font=("Microsoft YaHei UI", 11, "bold"))
-        self.品牌图.pack(side="left", padx=(8, 2))
-
-        self.项目名标 = tk.Label(
+        self.品牌图 = tk.Label(
             条,
-            text=" 核工坊  v%s" % 内核.版本,
+            image=self.图标["品牌"] if self.图标["品牌"] else None,
             bg=主题["标题栏"],
-            fg=主题["文本"],
-            font=("Microsoft YaHei UI", 9),
+            bd=0,
         )
-        self.项目名标.pack(side="left")
+        if self.图标["品牌"] is None:
+            self.品牌图.configure(
+                text="核",
+                fg=主题["文本"],
+                font=("Microsoft YaHei UI", 11, "bold"),
+            )
+        self.品牌图.pack(side="left", padx=(10, 4))
 
-        # 汉堡菜单（≡）：放右侧，点开完整菜单
+        # 菜单按钮：原来是个「≡」，现在写明白是主菜单，并保留汉堡图标
         self.汉堡 = tk.Label(
-            条, text="≡", bg=主题["标题栏"], fg=主题["面包屑字"],
-            font=("Microsoft YaHei UI", 13), padx=10, cursor="hand2",
+            条,
+            text="☰  菜单",
+            bg=主题["标题栏"],
+            fg=主题["次要文本"],
+            font=界面字体,
+            padx=8,
+            pady=4,
+            cursor="hand2",
         )
-        self.汉堡.pack(side="right")
+        self.汉堡.pack(side="left", padx=(2, 0))
         挂提示(self.汉堡, "主菜单（文件 / 编辑 / 运行 / 视图 / 帮助）")
 
         # 搜索框（PyCharm 的 Find Anything，这里做「查找」入口）
         self.搜索框 = tk.Entry(
             条,
-            bg=主题["面板2"],
+            bg=主题["面板"],
             fg=主题["文本"],
             insertbackground=主题["光标"],
             relief="flat",
             font=界面字体,
-            width=18,
+            width=20,
         )
-        self.搜索框.pack(side="right", padx=(0, 8), pady=4, ipady=2)
+        self.搜索框.pack(side="right", padx=(0, 10), pady=7, ipady=2)
         self.搜索框.bind("<Return>", lambda e: self.查找替换())
         挂提示(self.搜索框, "搜索（直接按回车打开查找框）")
 
@@ -1239,7 +1322,7 @@ class 主窗口:
         定义 = (
             ("运行", self.运行, self.图标["运行"], "运行当前文件（F5）"),
             ("停止", self.停止, self.图标["停止"], "停止运行（Shift+F5）"),
-            ("保存", self.保存, self.图标["保存"], "保存当前文件（Ctrl+S）"),
+            ("保存", self.保存当前文档, self.图标["保存"], "保存当前文件（Ctrl+S）"),
             ("打开", self.打开文件, self.图标["打开"], "打开 .xht 文件（Ctrl+O）"),
             ("设置", self.打开设置, self.图标["设置"], "设置（Ctrl+,）"),
         )
@@ -1357,9 +1440,20 @@ class 主窗口:
         self.树.bind("<<TreeviewOpen>>", self._展开节点)
         self.树.bind("<Double-1>", self._双击树)
         self.树.bind("<Return>", self._双击树)
-        滚动 = ttk.Scrollbar(self.项目框, orient="vertical", command=self.树.yview)
+        滚动 = tk.Scrollbar(
+            self.项目框,
+            orient="vertical",
+            command=self.树.yview,
+            bg=主题["按钮"],
+            troughcolor=主题["面板2"],
+            activebackground=主题["按钮热"],
+            bd=0,
+            relief="flat",
+            width=12,
+        )
         滚动.pack(side="right", fill="y")
         self.树.configure(yscrollcommand=滚动.set)
+        self.树滚动 = 滚动
 
     def 收起项目树(self):
         for 节点 in self.树.get_children(""):
@@ -1459,7 +1553,7 @@ class 主窗口:
             标题行,
             text="语法对照表",
             bg=主题["面板"],
-            fg=主题["次要文本"],
+            fg=主题["文本"],
             font=("Microsoft YaHei UI", 9, "bold"),
             anchor="w",
             padx=10,
@@ -1470,6 +1564,8 @@ class 主窗口:
             bg=主题["编辑器"],
             fg=主题["文本"],
             relief="flat",
+            bd=0,
+            highlightthickness=0,
             insertbackground=主题["光标"],
             font=界面字体,
         )
@@ -1481,6 +1577,7 @@ class 主窗口:
             fg=主题["文本"],
             relief="flat",
             bd=0,
+            highlightthickness=0,
             padx=10,
             pady=6,
             font=self.等宽字体,
@@ -1665,7 +1762,7 @@ class 主窗口:
         文件.add_command(label="打开…", accelerator="Ctrl+O", command=self.打开文件)
         文件.add_command(label="打开文件夹…", command=self.打开文件夹)
         文件.add_separator()
-        文件.add_command(label="保存", accelerator="Ctrl+S", command=self.保存)
+        文件.add_command(label="保存", accelerator="Ctrl+S", command=self.保存当前文档)
         文件.add_command(label="另存为…", accelerator="Ctrl+Shift+S", command=self.另存为)
         文件.add_separator()
         self.最近菜单 = tk.Menu(文件, tearoff=0, font=界面字体)
@@ -1795,19 +1892,87 @@ class 主窗口:
             background=主题["按钮"],
             troughcolor=主题["窗口"],
             bordercolor=主题["窗口"],
+            # clam 主题的滚动条由 lightcolor/darkcolor 决定滑块明暗，
+            # 不设这两项，浅色下会出现整条黑色滑块。
+            lightcolor=主题["按钮"],
+            darkcolor=主题["按钮"],
             arrowcolor=主题["次要文本"],
             relief="flat",
+            gripcount=0,
         )
-        样式.map("TScrollbar", background=[("active", 主题["按钮热"])])
+        样式.map(
+            "TScrollbar",
+            background=[("active", 主题["按钮热"]), ("pressed", 主题["按钮热"])],
+            arrowcolor=[("active", 主题["文本"])],
+        )
+        # clam 主题里滚动条滑块由 Vertical.Scrollbar.thumb 元素绘制，
+        # 只设 TScrollbar 的 background 不足以改到它，浅色下会留一条黑滑块。
+        样式.configure(
+            "Vertical.TScrollbar",
+            background=主题["按钮"],
+            troughcolor=主题["窗口"],
+            bordercolor=主题["窗口"],
+            lightcolor=主题["按钮"],
+            darkcolor=主题["按钮"],
+            arrowcolor=主题["次要文本"],
+            relief="flat",
+            gripcount=0,
+        )
+        样式.configure(
+            "Horizontal.TScrollbar",
+            background=主题["按钮"],
+            troughcolor=主题["窗口"],
+            bordercolor=主题["窗口"],
+            lightcolor=主题["按钮"],
+            darkcolor=主题["按钮"],
+            arrowcolor=主题["次要文本"],
+            relief="flat",
+            gripcount=0,
+        )
+        样式.map(
+            "Vertical.TScrollbar",
+            background=[("active", 主题["按钮热"]), ("pressed", 主题["按钮热"])],
+        )
+        样式.map(
+            "Horizontal.TScrollbar",
+            background=[("active", 主题["按钮热"]), ("pressed", 主题["按钮热"])],
+        )
+        # 滑块本体的着色：不同 ttk 版本对元素名的写法不同，逐个尝试。
+        for 元素 in (
+            "Vertical.Scrollbar.thumb",
+            "Horizontal.Scrollbar.thumb",
+        ):
+            try:
+                样式.configure(
+                    元素,
+                    background=主题["按钮"],
+                    lightcolor=主题["按钮"],
+                    darkcolor=主题["按钮"],
+                    bordercolor=主题["窗口"],
+                    relief="flat",
+                )
+            except tk.TclError:
+                pass
         样式.configure("TPanedwindow", background=主题["窗口"])
-        样式.configure("Sash", sashthickness=5, gripcount=0)
+        # 分隔条（Sash）必须给 background，否则 clam 主题会用默认深色，
+        # 浅色主题下会在编辑器与对照表之间留一条黑柱。
+        样式.configure(
+            "Sash",
+            sashthickness=5,
+            gripcount=0,
+            background=主题["窗口"],
+            bordercolor=主题["窗口"],
+            lightcolor=主题["窗口"],
+            darkcolor=主题["窗口"],
+        )
+        样式.map("Sash", background=[("active", 主题["强调"])])
         self.根.option_add("*Menu.background", 主题["面板"])
         self.根.option_add("*Menu.foreground", 主题["文本"])
         self.根.option_add("*Menu.activeBackground", 主题["强调"])
         self.根.option_add("*Menu.activeForeground", "#ffffff")
         for 框 in (self.项目框, self.侧框, self.下框):
             框.configure(bg=主题["面板2"])
-        for 框 in (self.编辑框, self.中部, self.主体):
+        for 框 in (self.编辑框, self.中部, self.主体, self.编辑器容器):
             框.configure(bg=主题["窗口"])
         for 框 in (self.标签栏, self.主工具条, self.左条):
             框.configure(bg=主题["工具条"])
@@ -1817,9 +1982,8 @@ class 主窗口:
             框.configure(bg=主题["面板"])
         self.编辑面包屑.configure(bg=主题["面包屑"], fg=主题["面包屑字"])
         self.面包屑.configure(bg=主题["工具条"], fg=主题["面包屑字"])
-        self.项目名标.configure(bg=主题["标题栏"], fg=主题["文本"])
         self.品牌图.configure(bg=主题["标题栏"])
-        self.汉堡.configure(bg=主题["标题栏"], fg=主题["面包屑字"])
+        self.汉堡.configure(bg=主题["标题栏"], fg=主题["次要文本"])
         self.搜索框.configure(
             bg=主题["面板2"], fg=主题["文本"], insertbackground=主题["光标"]
         )
@@ -1877,6 +2041,16 @@ class 主窗口:
             文档.换主题()
             try:
                 文档.文本.tag_configure("缩进线", foreground=主题["缩进线"])
+            except tk.TclError:
+                pass
+        刷新滚动条 = getattr(self, "树滚动", None)
+        if 刷新滚动条 is not None:
+            try:
+                刷新滚动条.configure(
+                    bg=主题["按钮"],
+                    troughcolor=主题["面板2"],
+                    activebackground=主题["按钮热"],
+                )
             except tk.TclError:
                 pass
         self._刷新标签外观()
@@ -2067,6 +2241,14 @@ class 主窗口:
             and getattr(self, "当前运行文件", None) == 文档.文件路径
         ):
             self.停止()
+        # 该文档若还有待执行的高亮任务，先取消，避免回调打在已销毁的控件上
+        if getattr(self, "_高亮文档", None) is 文档 and self._高亮任务 is not None:
+            try:
+                self.根.after_cancel(self._高亮任务)
+            except tk.TclError:
+                pass
+            self._高亮任务 = None
+            self._高亮文档 = None
         索引 = self.文档集.index(文档)
         self.文档集.remove(文档)
         文档.标签片.destroy()
@@ -2127,6 +2309,11 @@ class 主窗口:
         except OSError as e:
             self.状态("打不开文件：%s" % e)
             return None
+        # 读源码对解不出的字节会用 errors="replace" 兜底，因此二进制文件
+        # 不会报错，只会变成一堆乱码方块。用 NUL 把它拦下来。
+        if "\x00" in 内容:
+            self.状态("这不是文本文件，打不开：%s" % os.path.basename(路径))
+            return None
         文档 = 编辑器(self, 路径)
         self.文档集.append(文档)
         文档.grid(row=0, column=0, sticky="nsew")
@@ -2157,18 +2344,29 @@ class 主窗口:
             self.状态("项目：%s" % self.项目目录)
             self.存配置()
 
-    def 保存(self, 文档=None):
+    def 保存(self, 文档=None, 弹窗=False):
+        """保存文档。
+
+        参数 `弹窗` 决定保存失败时是否弹模态错误框：
+        只有用户亲手点保存才弹；自动保存、批量操作等场景一律只写状态栏，
+        否则一个模态框会把无人值守的流程永久挂住。
+        """
         文档 = 文档 or self.当前
         if 文档 is None:
             return False
         if not 文档.文件路径:
-            return self.另存为(文档)
+            return self.另存为(文档, 弹窗=弹窗)
         try:
+            目录 = os.path.dirname(文档.文件路径)
+            if 目录 and not os.path.isdir(目录):
+                os.makedirs(目录, exist_ok=True)
             with open(文档.文件路径, "w", encoding="utf-8", newline="\n") as f:
                 f.write(文档.取文本())
         except OSError as e:
             self.状态("保存失败：%s" % e)
-            messagebox.showerror("保存失败", str(e), parent=self.根)
+            self.控制台追加("保存失败：%s\n" % e, "错误")
+            if 弹窗:
+                messagebox.showerror("保存失败", str(e), parent=self.根)
             return False
         文档.已改 = False
         文档.文本.edit_modified(False)
@@ -2176,7 +2374,7 @@ class 主窗口:
         self.状态("已保存 %s" % os.path.basename(文档.文件路径))
         return True
 
-    def 另存为(self, 文档=None):
+    def 另存为(self, 文档=None, 弹窗=False):
         文档 = 文档 or self.当前
         if 文档 is None:
             return False
@@ -2192,10 +2390,14 @@ class 主窗口:
         if not 路径:
             return False
         文档.文件路径 = 规范化路径(路径)
-        ok = self.保存(文档)
+        ok = self.保存(文档, 弹窗=弹窗)
         if ok:
             self._加最近(文档.文件路径)
         return ok
+
+    def 保存当前文档(self):
+        """用户主动保存（工具条/快捷键）——这种场景才允许弹出错误框。"""
+        return self.保存(self.当前, 弹窗=True)
 
     def _加最近(self, 路径):
         路径 = 规范化路径(路径)
@@ -2227,14 +2429,9 @@ class 主窗口:
                 )
                 if 答案 is None:
                     return
-                if 答案 and not self.保存(文档):
+                if 答案 and not self.保存(文档, 弹窗=True):
                     return
-        if self.进程 and self.进程.poll() is None:
-            try:
-                self.进程.kill()
-            except Exception:
-                pass
-            self._收尾进程(self.进程)
+        self._终止子进程()
         self.配置.update(
             {
                 "主题": self.主题["名"],
@@ -2250,7 +2447,8 @@ class 主窗口:
         )
         self._已退出 = True
         存配置(self.配置)
-        self.根.destroy()
+        # 统一走 销毁：取消定时任务、终止子进程、释放拖放引用后再销毁窗口
+        self.销毁()
 
     # —— 项目树 ——
 
@@ -2392,6 +2590,7 @@ class 主窗口:
                 self.根.after_cancel(self._高亮任务)
             except Exception:
                 pass
+        self._高亮文档 = 文档
         self._高亮任务 = self.根.after(35, lambda: self.高亮(文档))
 
     def 高亮(self, 文档=None):
@@ -2400,19 +2599,29 @@ class 主窗口:
             return
         self._高亮任务 = None
         文本 = 文档.文本
-        内容 = 文本.get("1.0", "end-1c")
+        # 文档可能已被关闭、窗口可能已销毁，而 after 回调仍会到达；
+        # 不检查就会把 TclError 抛进 Tkinter 回调层（控制台刷一堆堆栈）。
+        try:
+            if not 文本.winfo_exists():
+                return
+            内容 = 文本.get("1.0", "end-1c")
+        except tk.TclError:
+            return
         文本.tag_remove("关键字", "1.0", "end")
         for 标签 in ("内置", "方法", "字符串", "数字", "注释", "函数名"):
             文本.tag_remove(标签, "1.0", "end")
-        for m in 高亮式.finditer(内容):
-            组 = m.lastgroup
-            if 组 is None:
-                continue
-            if 组 == "方法":
-                self.文本标(文本, "方法", m.start("方法"), m.end("方法"))
-                continue
-            self.文本标(文本, 组, m.start(), m.end())
-        self._画缩进线(文档)
+        try:
+            for m in 高亮式.finditer(内容):
+                组 = m.lastgroup
+                if 组 is None:
+                    continue
+                if 组 == "方法":
+                    self.文本标(文本, "方法", m.start("方法"), m.end("方法"))
+                    continue
+                self.文本标(文本, 组, m.start(), m.end())
+            self._画缩进线(文档)
+        except tk.TclError:
+            return
 
     def _画缩进线(self, 文档):
         """在编辑器上叠加一层竖线，模拟 PyCharm 的缩进参考线。"""
@@ -2698,18 +2907,23 @@ class 主窗口:
 
     def 停止(self):
         if self.进程 and self.进程.poll() is None:
-            try:
-                self.进程.kill()
-            except Exception:
-                pass
+            self._终止子进程()
+            # 停止后丢弃这一轮还排在队列里的输出，避免「已停止」之后又冒出内容
+            self._丢弃队列()
             self.控制台追加("\n[已停止]\n", "错误")
-            self._收尾进程(self.进程)
-            self.进程 = None
             self.输入框.configure(state="disabled")
             self.运行状态.configure(text="就绪", fg=self.主题["次要文本"])
             self.状态("已停止")
         else:
             self.状态("当前没有在运行的程序")
+
+    def _丢弃队列(self):
+        """清空输出队列里属于当前这轮的残留内容。"""
+        while True:
+            try:
+                self.输出队列.get_nowait()
+            except queue.Empty:
+                return
 
     def _发送输入(self, _e=None):
         内容 = self.输入框.get()
@@ -2978,7 +3192,7 @@ class 主窗口:
         绑定 = {
             "<Control-n>": lambda e: self.新建(),
             "<Control-o>": lambda e: self.打开文件(),
-            "<Control-s>": lambda e: (self.保存(), "break")[1],
+            "<Control-s>": lambda e: (self.保存当前文档(), "break")[1],
             "<Control-Shift-S>": lambda e: self.另存为(),
             "<Control-w>": lambda e: self.关闭当前(),
             "<F5>": lambda e: self.运行(),
