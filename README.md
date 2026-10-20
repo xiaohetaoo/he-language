@@ -197,6 +197,25 @@ python 测试/发布Release.py       # 建 Release 并把 exe 作为附件上传
 从环境变量 `GH_TOKEN` 读取。SSH 密钥只能 push 代码，**不能**上传 Release 附件。
 上传后会复查页面附件列表，确认 exe 真的在。
 
+若网络屏蔽了 `api.github.com`：脚本会自动改用可用 IP 直连；
+时通时断时用 `python 测试/发布重试.py` 反复重试，抓到窗口就发布。
+
+**补发旧版本的 exe**：从 `版本/vX.Y.Z/` 里打包，别用当前代码（版本号会不对）：
+
+```bash
+cd 版本/v0.0.1
+python -m PyInstaller --onefile --windowed --name 核工坊 \
+  --icon 素材/核图标.ico \
+  --add-data "素材;素材" --add-data "例子;例子" \
+  --add-data "核.py;." --add-data "核工坊.py;." --add-data "设置窗口.py;." \
+  --add-data "拖放.py;." --add-data "圆角.py;." \
+  --hidden-import 拖放 --hidden-import 圆角 --hidden-import 设置窗口 \
+  启动器.py
+```
+
+附件名要用 ASCII（如 `HeLanguage-0.0.1-win64.exe`）：
+GitHub 会把中文文件名解析成空，最终存成 `default.exe`。
+
 下载页：<https://github.com/xiaohetaoo/he-language/releases>
 
 
