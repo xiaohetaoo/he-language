@@ -138,11 +138,40 @@ def 上传附件(发布, 令牌, 路径):
     return False, "上传 %s 失败（%s）：%s" % (名, 码, 结果)
 
 
+def 从凭据管理器取令牌():
+    """尝试从 git 的凭据管理器里取 GitHub token。
+
+    能取到就直接用；取到但无效会被 API 拒（401），那种情况需要重新生成。
+    """
+    import subprocess
+
+    try:
+        结果 = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            text=True,
+            cwd=根目录,
+            timeout=20,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    for 行 in (结果.stdout or "").splitlines():
+        if 行.startswith("password="):
+            值 = 行.split("=", 1)[1].strip()
+            return 值 or None
+    return None
+
+
 def 主():
     参数 = sys.argv[1:]
     令牌 = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if "--token" in 参数:
         令牌 = 参数[参数.index("--token") + 1]
+    if not 令牌 and "--凭据" in 参数:
+        令牌 = 从凭据管理器取令牌()
+        if 令牌:
+            print("已从 git 凭据管理器取到令牌（%d 位）" % len(令牌))
     if not 令牌:
         print("缺少令牌 —— GitHub 的 Release 接口必须用 Personal Access Token。")
         print()
