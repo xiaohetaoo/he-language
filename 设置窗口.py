@@ -64,6 +64,20 @@ class 设置窗口(tk.Toplevel):
     def 协议(self):
         self.protocol("WM_DELETE_WINDOW", self.取消)
 
+    def 销毁(self):
+        """清理内部菜单等资源后销毁，避免留下 Tcl 命令引用。"""
+        try:
+            for 子 in self.winfo_children():
+                try:
+                    子.destroy()
+                except Exception:
+                    pass
+        finally:
+            try:
+                super().destroy()
+            except Exception:
+                pass
+
     def _居中(self):
         self.update_idletasks()
         宽 = self.winfo_width()
