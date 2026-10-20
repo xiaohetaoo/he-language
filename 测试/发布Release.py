@@ -42,11 +42,130 @@ def _头(令牌):
         "Authorization": "Bearer %s" % 令牌,
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        # GitHub 强制要求 User-Agent，缺了会直接 403
+        "User-Agent": "he-language-release-script",
     }
 
 
+def _直连请求(方法, 地址, 头, 体, 超时):
+    """绕开 DNS，直接用可用 IP 连 api.github.com。
+
+    某些网络会把 api.github.com 的某个 IP 屏蔽（DNS 只返回那一个），
+    但同一域名在别的 IP 上是通的。这里按 IP 建立 TCP，TLS 里仍用
+    api.github.com 作 SNI/Host，校验照常做，安全性不打折。
+    """
+    import socket
+    import ssl
+    from urllib.parse import urlsplit
+
+    解析 = urlsplit(地址)
+    主机 = 解析.hostname or "api.github.com"
+    路径 = 解析.path or "/"
+    if 解析.query:
+        路径 += "?" + 解析.query
+    # 非 ASCII 字符必须在请求行里百分号编码，否则服务器会把文件名解析成空
+    # （曾出现上传中文名 exe 后变成 default.exe）
+    if not 路径.isascii():
+        路径 = urllib.parse.quote(路径, safe="/?=&%:+,")
+
+    # 主机不同，能用的 IP 也不同：上传走 uploads.github.com，
+    # 它的 IP 与 api.github.com 不是同一组，混用会得到 404。
+    if os.environ.get("HE_API_IPS"):
+        候选 = [IP.strip() for IP in os.environ["HE_API_IPS"].replace(";", ",").split(",") if IP.strip()]
+    else:
+        候选 = []
+    try:
+        import socket as _socket
+
+        候选.insert(0, _socket.gethostbyname(主机))
+    except Exception:  # noqa: BLE001
+        pass
+    if 主机.startswith("uploads."):
+        候选 += ["20.205.243.161", "20.205.243.162", "20.205.243.163"]
+    else:
+        候选 += [
+            "140.82.112.6", "140.82.113.6", "140.82.114.6", "140.82.116.6",
+            "140.82.121.6", "20.205.243.168",
+        ]
+    上次错误 = ""
+    for IP in 候选:
+        IP = IP.strip()
+        if not IP:
+            continue
+        try:
+            上下文 = ssl.create_default_context()
+            # 先用很短的超时探测端口，不通就立刻换下一个，
+            # 否则一个死 IP 会拖住 30 秒（多个候选累积起来像卡死）。
+            原始 = socket.create_connection((IP, 443), timeout=3)
+            原始.settimeout(min(超时, 60))
+            套 = 上下文.wrap_socket(原始, server_hostname=主机)
+            try:
+                行集 = [
+                    "%s %s HTTP/1.1" % (方法, 路径),
+                    "Host: %s" % 主机,
+                ]
+                for 键, 值 in 头.items():
+                    if 键.lower() in ("host", "content-length"):
+                        continue
+                    行集.append("%s: %s" % (键, 值))
+                行集.append("Content-Length: %d" % (len(体) if 体 else 0))
+                行集.append("Connection: close")
+                if 体:
+                    行集.append("")   # 空行分隔头与体（下面再拼一次）
+                    套.sendall(("\r\n".join(行集[:-1]) + "\r\n\r\n").encode("utf-8") + 体)
+                else:
+                    行集.append("")
+                    套.sendall(("\r\n".join(行集) + "\r\n").encode("utf-8"))
+                数据 = b""
+                while True:
+                    块 = 套.recv(65536)
+                    if not 块:
+                        break
+                    数据 += 块
+            finally:
+                套.close()
+            状态行, _, 剩余 = 数据.partition(b"\r\n")
+            头部, _, 正文 = 剩余.partition(b"\r\n\r\n")
+            码 = int(状态行.split(b" ")[1])
+            # 处理分块传输
+            头文 = 头部.decode("latin1").lower()
+            if "transfer-encoding: chunked" in 头文:
+                正文 = _解分块(正文)
+            try:
+                结果 = json.loads(正文) if 正文 else {}
+            except Exception:  # noqa: BLE001
+                结果 = {"原始": 正文[:200].decode("utf-8", "replace")}
+            return 码, 结果
+        except Exception as e:  # noqa: BLE001
+            上次错误 = "%s@%s 失败：%s" % (主机, IP, type(e).__name__)
+            continue
+    return 0, {"错误": "所有 IP 都连不上（%s）" % 上次错误}
+
+
+def _解分块(数据):
+    """解 HTTP chunked 编码。"""
+    结果 = b""
+    while 数据:
+        行尾 = 数据.find(b"\r\n")
+        if 行尾 < 0:
+            break
+        try:
+            长度 = int(数据[:行尾].split(b";")[0], 16)
+        except ValueError:
+            break
+        if 长度 == 0:
+            break
+        结果 += 数据[行尾 + 2: 行尾 + 2 + 长度]
+        数据 = 数据[行尾 + 2 + 长度 + 2:]
+    return 结果
+
+
 def 请求(方法, 路径, 令牌, 数据=None, 原始=None, 类型=None, 超时=60):
-    """调 GitHub API；返回 (状态码, 解析结果)。"""
+    """调 GitHub API；返回 (状态码, 解析结果)。
+
+    先走普通 urllib；如果连不上（常见于 api.github.com 被屏蔽），
+    自动退回「直连可用 IP」的方式重试。
+    """
     地址 = 路径 if 路径.startswith("http") else 接口 + 路径
     头 = _头(令牌)
     if 原始 is not None:
@@ -57,6 +176,10 @@ def 请求(方法, 路径, 令牌, 数据=None, 原始=None, 类型=None, 超时
         体 = json.dumps(数据).encode("utf-8")
     else:
         体 = None
+
+    if os.environ.get("HE_DIRECT") == "1":
+        return _直连请求(方法, 地址, 头, 体, 超时)
+
     请求对象 = urllib.request.Request(地址, data=体, headers=头, method=方法)
     try:
         with urllib.request.urlopen(请求对象, timeout=超时) as 响应:
@@ -69,6 +192,10 @@ def 请求(方法, 路径, 令牌, 数据=None, 原始=None, 类型=None, 超时
         except Exception:  # noqa: BLE001
             return e.code, {"错误": 原文}
     except Exception as e:  # noqa: BLE001
+        码, 结果 = _直连请求(方法, 地址, 头, 体, 超时)
+        if 码:
+            print("（已改用直连 IP 访问 api.github.com）")
+            return 码, 结果
         return 0, {"错误": "%s: %s" % (type(e).__name__, e)}
 
 
