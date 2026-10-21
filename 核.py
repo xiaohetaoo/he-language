@@ -23,7 +23,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.3"
+版本 = "0.0.4"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -278,6 +278,34 @@ read readline readlines write writelines close seek tell flush
 已定义英文方法 = set(方法表.values())
 已定义英文参数 = set(参数表.values())
 
+#: 异常类型名。写 `核异常 除零错误：` 时转成 `except ZeroDivisionError:`。
+#: 这些名字只在 `核异常` / `核抛出` 之后生效，别处仍按普通标识符处理。
+异常表 = {
+    "错误": "Exception",
+    "常见错误": "Exception",
+    "除零错误": "ZeroDivisionError",
+    "零除错误": "ZeroDivisionError",
+    "类型错误": "TypeError",
+    "值错误": "ValueError",
+    "下标错误": "IndexError",
+    "越界错误": "IndexError",
+    "键错误": "KeyError",
+    "名字错误": "NameError",
+    "属性错误": "AttributeError",
+    "断言错误": "AssertionError",
+    "断词错误": "StopIteration",
+    "迭代结束": "StopIteration",
+    "文件找不到": "FileNotFoundError",
+    "文件错误": "FileNotFoundError",
+    "系统错误": "OSError",
+    "缩进错误": "IndentationError",
+    "制表符错误": "TabError",
+    "递归太深": "RecursionError",
+    "模块找不到": "ModuleNotFoundError",
+    "语法错误": "SyntaxError",
+    "未绑定错误": "UnboundLocalError",
+}
+
 #: 常见异常的中文提示。
 异常说明 = {
     "NameError": "用到了没定义的变量或函数，检查名字是否写错",
@@ -290,7 +318,7 @@ read readline readlines write writelines close seek tell flush
     "AttributeError": "对象没有这个属性或方法",
     "FileNotFoundError": "找不到文件",
     "RecursionError": "递归太深",
-    "ModuleNotFoundError": "找不到模块（核语言第一版不引入库）",
+    "ModuleNotFoundError": "找不到模块。.xht 模块要和主脚本放在同一目录；Python 库第一版不引入",
     "IndentationError": "缩进不对，检查每行开头的空格",
     "TabError": "缩进里混用了空格和制表符",
     "SyntaxError": "语法不对",
@@ -369,6 +397,21 @@ def 规范化源码(s):
             引号 = nc
             if i + 2 < n and 规范化单字(s[i + 1]) == nc and 规范化单字(s[i + 2]) == nc:
                 引号 = nc * 3
+            # 关键：收尾只看「原字符」是否与起始引号相同，或者是否属于
+            # 与之对应的那一对中文别名。
+            # 之前用 规范化单字(s[k]) 判断，而 NFKC/别名会把 「」『』 都归一成
+            # 普通的 "，于是字符串内容里的「」被当成结束符，内容被悄悄改写
+            # —— 与「字符串内容保持原样」的承诺相违。
+            if c in ("\u201c", "\u300c", "\u300e"):
+                收尾集 = {"\u201d", "\u300d", "\u300f"}
+            elif c in ("\u201d", "\u300d", "\u300f"):
+                收尾集 = {"\u201d", "\u300d", "\u300f"}
+            elif c in ("\u2018",):
+                收尾集 = {"\u2019"}
+            elif c in ("\u2019",):
+                收尾集 = {"\u2019"}
+            else:
+                收尾集 = {c}
             结果.append(引号)
             k = i + len(引号)
             内容起 = k
@@ -377,13 +420,13 @@ def 规范化源码(s):
                     k += 2
                     continue
                 if len(引号) == 1:
-                    if 规范化单字(s[k]) == nc:
+                    if s[k] in 收尾集:
                         break
                 elif (
                     k + 2 < n
-                    and 规范化单字(s[k]) == nc
-                    and 规范化单字(s[k + 1]) == nc
-                    and 规范化单字(s[k + 2]) == nc
+                    and s[k] == 引号[0]
+                    and s[k + 1] == 引号[0]
+                    and s[k + 2] == 引号[0]
                 ):
                     break
                 k += 1
@@ -747,6 +790,31 @@ class 转译器:
             return False
         return self._后面是等号(s, j)
 
+    def _在异常位置(self, s, i):
+        """判断这个标识符是否是「核异常 …」或「核抛出 …」的类型名。
+
+        只认紧跟在引导词之后的那一个名字：
+        `核异常 除零错误 核作为 错误：` 里的 除零错误 是类型，错误 是变量名。
+        """
+        行首 = s.rfind("\n", 0, i) + 1
+        前缀 = s[行首:i]
+        引导位置 = -1
+        引导词 = ""
+        for 引导 in ("核异常", "核抛出"):
+            位置 = 前缀.rfind(引导)
+            if 位置 > 引导位置:
+                引导位置 = 位置
+                引导词 = 引导
+        if 引导位置 < 0:
+            return False
+        之后 = 前缀[引导位置 + len(引导词):]
+        # 走到「核作为」之后，就说明已经在变量名位置了，不再是类型
+        if "核作为" in 之后:
+            return False
+        # 多个异常并列时（逗号之后）也都算类型，这里不做限制；
+        # 但若这段里已经有别的标识符（说明当前不是第一个），也照常允许。
+        return True
+
     # —— 标识符 ——
 
     def 翻译标识符(self, 名字, 行, 列, 是参数, s, i, j):
@@ -763,6 +831,12 @@ class 转译器:
             if 名字 in 英文参数 and 名字 not in 已定义英文参数:
                 self.记录(名字, "参数名", 行, 列)
             return 名字
+
+        # 异常类名：只在本行前面出现过「核异常」或「核抛出」时才算。
+        # 这样 `核异常 除零错误：` 能转成 `except ZeroDivisionError:`，
+        # 而用户在别处写「除零错误」当变量名时不受影响。
+        if 名字 in 异常表 and self._在异常位置(s, i):
+            return 异常表[名字]
 
         if 名字 in 关键词表:
             return 关键词表[名字]
@@ -973,10 +1047,69 @@ def 编译源码(源码, 文件名, 报告=None, 流=None):
     return 代码, 译
 
 
+def _当前脚本目录():
+    """记住正在运行的主脚本所在目录，供 .xht 导入器兜底查找。"""
+    return getattr(_当前脚本目录, "_值", "")
+
+
+def _装xht导入器():
+    """让 `核导入 工具` 能加载同目录的 工具.xht。
+
+    做法是注册一个 meta path finder：遇到 .xht 文件时，用同一个转译器
+    把中文源码转成 Python 再执行，得到的模块和普通 Python 模块一样可用。
+    只认 .xht，不影响任何正常导入。
+    """
+    import importlib.abc
+    import importlib.util
+    import types
+
+    if getattr(_装xht导入器, "_已装", False):
+        return
+    _装xht导入器._已装 = True
+
+    class 加载器(importlib.abc.Loader):
+        def __init__(self, 全路径):
+            self.全路径 = 全路径
+
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            源码 = 读源码(self.全路径)
+            译 = 转译(源码, self.全路径, None)
+            代码 = compile(译, self.全路径, "exec")
+            exec(代码, module.__dict__)
+
+    class 查找器(importlib.abc.MetaPathFinder):
+        def find_spec(self, 全名, 搜索路径, 目标=None):
+            末名 = 全名.rsplit(".", 1)[-1]
+            # 搜索路径为 None 时（顶层导入），兜底再看当前工作目录与脚本目录
+            目录集 = list(搜索路径) if 搜索路径 else []
+            目录集 += [os.getcwd(), _当前脚本目录()]
+            for 目录 in 目录集:
+                if not 目录 or not os.path.isdir(目录):
+                    continue
+                候选 = os.path.join(目录, 末名 + 扩展名)
+                if os.path.isfile(候选):
+                    return importlib.util.spec_from_loader(
+                        全名, 加载器(候选), origin=候选
+                    )
+            return None
+
+    sys.meta_path.insert(0, 查找器())
+
+
 def 执行代码(代码, 源码, 文件名, 参数=None, 流=None):
     全局 = {"__name__": "__main__", "__file__": 文件名, "__doc__": None}
     旧参数 = sys.argv
     sys.argv = [文件名] + list(参数 or [])
+    # 让脚本所在目录可被导入，并按需把同目录的 .xht 当成模块
+    脚本目录 = os.path.dirname(os.path.abspath(文件名)) if 文件名 else ""
+    _当前脚本目录._值 = 脚本目录
+    _旧路径 = list(sys.path)
+    if 脚本目录 and os.path.isdir(脚本目录) and 脚本目录 not in sys.path:
+        sys.path.insert(0, 脚本目录)
+    _装xht导入器()
     try:
         exec(代码, 全局)
     except SystemExit as e:
@@ -995,6 +1128,7 @@ def 执行代码(代码, 源码, 文件名, 参数=None, 流=None):
         return 1
     finally:
         sys.argv = 旧参数
+        sys.path[:] = _旧路径
     return 0
 
 

@@ -527,6 +527,18 @@ class 设置窗口(tk.Toplevel):
                 行, text=值, bg=主题["窗口"], fg=主题["文本"], font=界面字体, anchor="w"
             ).pack(side="left")
 
+        发布链接 = tk.Label(
+            self.内容,
+            text="查看最新版本与下载 → github.com/xiaohetaoo/he-language/releases",
+            bg=主题["窗口"],
+            fg=主题["强调"],
+            font=("Microsoft YaHei UI", 9),
+            anchor="w",
+            cursor="hand2",
+        )
+        发布链接.pack(fill="x", pady=(14, 0))
+        发布链接.bind("<Button-1>", lambda e: self._打开发布页())
+
         tk.Label(
             self.内容,
             text="\n帮助 → 版本历史 可查看每个已归档版本。",
@@ -535,7 +547,25 @@ class 设置窗口(tk.Toplevel):
             font=("Microsoft YaHei UI", 8),
             anchor="w",
             justify="left",
-        ).pack(fill="x", pady=(12, 0))
+        ).pack(fill="x", pady=(8, 0))
+
+    def _打开发布页(self):
+        """打开 GitHub 发布页，方便查看有没有新版本。"""
+        地址 = "https://github.com/xiaohetaoo/he-language/releases"
+        try:
+            if os.name == "nt":
+                os.startfile(地址)
+            else:
+                import webbrowser
+
+                webbrowser.open(地址)
+        except Exception:  # noqa: BLE001
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(地址)
+                self.主窗.状态("打不开浏览器，链接已复制到剪贴板")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _重建(self):
         self.主题 = self.主窗.主题
