@@ -23,7 +23,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.2"
+版本 = "0.0.3"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -104,7 +104,7 @@ import unicodedata
     "核字符号": "chr",
     "核复数": "complex",
     "核删属": "delattr",
-    "核目录": "dir",
+    "核列属": "dir",
     "核除余": "divmod",
     "核编号": "enumerate",
     "核求值": "eval",
@@ -912,7 +912,46 @@ def 显示运行错误(e, 源码, 文件名, 流=None):
     说明 = 异常说明.get(类型)
     if 说明:
         流.write("  提示：%s\n" % 说明)
+    # 「TypeError: 'xxx' object is not callable」多半是把内置名当变量赋值了，
+    # 例如写了 `核说 = 3`，之后 `核说（...）` 就会这样。这里点明一下。
+    提示 = _覆盖内置的线索(e, 源码)
+    if 提示:
+        流.write("  线索：%s\n" % 提示)
     流.flush()
+
+
+def _覆盖内置的线索(e, 源码):
+    """出错像是「内置名被当变量赋值后又被当函数用」时，给一句明确提示。
+
+    只看异常文本不够（`'int' object is not callable` 里的 int 是类型名），
+    所以改为扫源码：找出「对照表里的名字出现在赋值左边」的行，
+    再看出错行有没有把这个名字当函数调用。
+    """
+    if "not callable" not in str(e) and not isinstance(e, NameError):
+        return ""
+    引用行 = ""
+    类型 = getattr(e, "name", None)
+    if not isinstance(e, NameError):
+        # 从 traceback 里取最后一行的源码位置
+        try:
+            帧 = traceback.extract_tb(e.__traceback__)[-1]
+            行号 = 帧.lineno or 0
+            行集 = 源码.splitlines()
+            引用行 = 行集[行号 - 1] if 0 < 行号 <= len(行集) else ""
+        except Exception:
+            引用行 = ""
+
+    for 中, 英 in 函数表.items():
+        # 源码里确实把这个名字赋过值
+        if not re.search(r"^\s*%s\s*=" % re.escape(中), 源码, re.M):
+            continue
+        # 出错行里把它当函数调用（或直接引用）
+        if 引用行 and (中 in 引用行 or (类型 and 类型 in 引用行)):
+            return (
+                "变量「%s」覆盖了内置函数 %s：源码里有 `%s = …` 这样的赋值。\n"
+                "        换个变量名即可。" % (中, 英, 中)
+            )
+    return ""
 
 
 # ---------------------------------------------------------------------------
