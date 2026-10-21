@@ -102,14 +102,16 @@ class 转译测试(unittest.TestCase):
     def test_未定义记录(self):
         报告 = 内核.未定义报告(None)
         转译(
-            "核说（sum（[1, 2]））\n核说（type（1））\n“x”.capitalize（）\n核说（1, file=核空）",
+            "核说（ascii（1））\n核说（bytearray（1））\n“x”.casefold（）\n核说（1, 核尾=核对）",
             报告,
         )
         类别 = set(报告.条目)
-        self.assertIn(("sum", "内置函数"), 类别)
-        self.assertIn(("type", "内置函数"), 类别)
-        self.assertIn(("capitalize", "方法"), 类别)
-        self.assertIn(("file", "参数名"), 类别)
+        self.assertIn(("ascii", "内置函数"), 类别)
+        self.assertIn(("bytearray", "内置函数"), 类别)
+        self.assertIn(("casefold", "方法"), 类别)
+        # 已定义的参数（核尾→end）不该被记成未定义
+        self.assertNotIn(("核尾", "参数名"), 类别)
+        self.assertNotIn(("end", "参数名"), 类别)
 
     def test_已定义英文不记未定义(self):
         报告 = 内核.未定义报告(None)
@@ -126,9 +128,10 @@ class 转译测试(unittest.TestCase):
         self.assertEqual(转译(bom + "核说（1）" + chr(10)).strip(), "print(1)")
 
     def test_未定义不误报(self):
+        # 赋值语句左边的名字是用户自己定义的，不该记进未定义清单
         报告 = 内核.未定义报告(None)
-        转译("len = 3\n核说（len）\n核说（sum）", 报告)
-        self.assertEqual(list(报告.条目), [("sum", "内置函数")])
+        转译("len = 3\n核说（len）\n核说（ascii）", 报告)
+        self.assertEqual(list(报告.条目), [("ascii", "内置函数")])
 
 
 class 运行测试(unittest.TestCase):
@@ -215,27 +218,27 @@ class 运行测试(unittest.TestCase):
     def test_未定义清单累积(self):
         路径 = os.path.join(self.目录, "程序.xht")
         with open(路径, "w", encoding="utf-8") as f:
-            f.write('核说（sum（[1, 2]））\n核说（"x".capitalize（））\n')
+            f.write('核说（ascii（1））\n核说（"x".casefold（））\n')
         for _ in range(2):
             subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
         清单 = os.path.join(self.目录, "未定义.txt")
         self.assertTrue(os.path.exists(清单))
         with open(清单, encoding="utf-8") as f:
             内容 = f.read()
-        self.assertIn("sum\t内置函数\t2", 内容)
-        self.assertIn("capitalize\t方法\t2", 内容)
+        self.assertIn("ascii\t内置函数\t2", 内容)
+        self.assertIn("casefold\t方法\t2", 内容)
 
     def test_未定义次数按真实出现计(self):
         # 同一个文件里出现两次，次数应为 2（而不是只记一次）
         路径 = os.path.join(self.目录, "多处.xht")
         with open(路径, "w", encoding="utf-8") as f:
-            f.write("核说（sum（[1]））\n核说（sum（[2]））\n")
+            f.write('核说（ascii（1））\n核说（ascii（2））\n')
         subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
         清单 = os.path.join(self.目录, "未定义.txt")
         with open(清单, encoding="utf-8") as f:
             内容 = f.read()
-        行 = [x for x in 内容.splitlines() if x.startswith("sum\t")]
-        self.assertTrue(行, msg="清单里应有 sum 记录：\n%s" % 内容)
+        行 = [x for x in 内容.splitlines() if x.startswith("ascii\t")]
+        self.assertTrue(行, msg="清单里应有 ascii 记录：\n%s" % 内容)
         次数 = 行[0].split("\t")[2]
         self.assertEqual(次数, "2", msg=行[0])
 
