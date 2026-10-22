@@ -172,7 +172,9 @@ def 跑():
     检查(w.根.title().startswith("核工坊 v"), "原生标题含版本：%s" % w.根.title())
     检查(not hasattr(w, "项目名标"), "已移除重复的版本标签")
     检查(w.标题栏.winfo_ismapped(), "顶部条可见")
-    检查("菜单" in w.汉堡.cget("text"), "菜单按钮：%s" % w.汉堡.cget("text"))
+    检查(bool(w.汉堡.cget("text").strip()), "菜单按钮：%r" % w.汉堡.cget("text"))
+    检查(w.窗口钮.keys() == {"关闭", "最大化", "最小化"}, "自绘窗口按钮齐全")
+    检查(getattr(w, "_原生栏已去", None) is not None, "原生标题栏处理已执行")
     检查(w.搜索框.winfo_ismapped(), "搜索框可见")
     检查(w.品牌图.winfo_ismapped(), "品牌图可见")
     检查(len(w.按钮集) >= 4, "工具栏按钮 %d 个" % len(w.按钮集))
@@ -321,6 +323,28 @@ def 跑():
     if 设置.winfo_exists():
         设置.destroy()
     根.update()
+
+    print("[分栏保持]")
+    # 用户拖过分隔条后，点窗口或改尺寸都不该被还原成默认 30%
+    根.update()
+    总高 = w.分栏.winfo_height()
+    if 总高 > 400:
+        w.分栏.sash_place(0, 0, int(总高 * 0.45))
+        根.update()
+        w._记分栏比例()
+        比例 = w._分栏比例
+        检查(比例 is not None, "拖动后记录了分栏比例：%.3f" % (比例 or 0))
+        # 触发一次窗口缩放事件
+        根.event_generate("<Configure>")
+        for _ in range(40):
+            根.update()
+            time.sleep(0.01)
+        实际 = (w.分栏.winfo_height() - w.分栏.sash_coord(0)[1]) / float(
+            w.分栏.winfo_height()
+        )
+        检查(abs(实际 - 比例) < 0.03, "点窗口后分栏没被还原（实际 %.3f / 目标 %.3f）" % (实际, 比例))
+    检查(str(w.分栏.cget("opaqueresize")) in ("0", "false", "False"),
+         "拖动分隔条时不实时重排（避免撕裂）")
 
     print("[面板隐藏不留空白]")
     w._藏对照表(); 根.update()

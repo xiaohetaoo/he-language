@@ -46,48 +46,49 @@ import 圆角  # noqa: E402
 
 深色 = {
     "名": "深色",
-    # 层次：只留两档明暗（编辑器/面板），差值收窄到 6 左右。
-    # 之前窗口→编辑器→面板→面板2 跨了四级，拖动分栏时像一层层叠起来的板子。
-    "窗口": "#232427",
-    "编辑器": "#202124",
-    "面板": "#26272b",
-    "面板2": "#25262a",
-    "边框": "#34363b",
-    "文本": "#dfe1e5",
-    "次要文本": "#9da0a8",
-    "行号底": "#202124",
-    "行号字": "#8a8f98",
-    "当前行": "#23252a",
-    "选区": "#2f5d9e",
-    "光标": "#dfe1e5",
-    "关键字": "#cf8e6d",
-    "内置": "#d5b778",
-    "方法": "#d5b778",
-    "字符串": "#6aab73",
-    "数字": "#2aacb8",
-    "注释": "#8f949c",
-    "函数名": "#56a8f5",
-    "控制台底": "#202124",
-    "控制台字": "#c8cad0",
-    "错误": "#f75464",
-    "输入": "#6aab73",
-    "命令": "#8f949c",
-    "按钮": "#34363b",
-    "按钮热": "#3e4046",
-    "选中行": "#2e436e",
-    "标签未选": "#2b2d30",
-    "强调": "#56a8f5",
-    "标题栏": "#26272b",
-    "工具条": "#26272b",
-    "工具条热": "#34363b",
-    "工具条选中": "#34363b",
-    "缩进线": "#34373c",
-    "面包屑": "#1e1f22",
-    "面包屑字": "#a6abb4",
-    "标签选中底线": "#56a8f5",
-    "运行条": "#202124",
-    "状态栏": "#26272b",
-    "分组标题": "#c9ccd3",
+    # PyCharm 2024 Darcula 的真实取值：
+    # 编辑器 #1E1F22 与 面板 #2B2D30 是两档，靠 1px 分隔线（#393B40）过渡，
+    # 而不是把两者调成近似色 —— 那样会显得发灰、没层次。
+    "窗口": "#2B2D30",
+    "编辑器": "#1E1F22",
+    "面板": "#2B2D30",
+    "面板2": "#2B2D30",
+    "边框": "#393B40",
+    "文本": "#DFE1E5",
+    "次要文本": "#9DA0A8",
+    "行号底": "#1E1F22",
+    "行号字": "#7F848E",
+    "当前行": "#22252A",
+    "选区": "#2E436E",
+    "光标": "#DFE1E5",
+    "关键字": "#CF8E6D",
+    "内置": "#D5B778",
+    "方法": "#D5B778",
+    "字符串": "#6AAB73",
+    "数字": "#2AACB8",
+    "注释": "#7A7E85",
+    "函数名": "#56A8F5",
+    "控制台底": "#1E1F22",
+    "控制台字": "#BCBEC4",
+    "错误": "#F75464",
+    "输入": "#6AAB73",
+    "命令": "#7A7E85",
+    "按钮": "#393B40",
+    "按钮热": "#43454A",
+    "选中行": "#2E436E",
+    "标签未选": "#2B2D30",
+    "强调": "#3574F0",
+    "标题栏": "#2B2D30",
+    "工具条": "#2B2D30",
+    "工具条热": "#393B40",
+    "工具条选中": "#393B40",
+    "缩进线": "#313438",
+    "面包屑": "#1E1F22",
+    "面包屑字": "#9DA0A8",
+    "标签选中底线": "#3574F0",
+    "运行条": "#1E1F22",
+    "状态栏": "#2B2D30",
+    "分组标题": "#DFE1E5",
     "圆角": 10,
     "圆角小": 6,
     "按钮圆角": 8,
@@ -516,10 +517,12 @@ class 编辑器(tk.Frame):
             self,
             orient="vertical",
             bg=主窗.主题["按钮"],
-            troughcolor=主窗.主题["窗口"],
+            troughcolor=主窗.主题["面板"],
             activebackground=主窗.主题["按钮热"],
             bd=0,
             relief="flat",
+            highlightthickness=0,
+            elementborderwidth=0,
             width=12,
         )
         self.滚动.pack(side="right", fill="y")
@@ -552,10 +555,12 @@ class 编辑器(tk.Frame):
             self,
             orient="horizontal",
             bg=主窗.主题["按钮"],
-            troughcolor=主窗.主题["窗口"],
+            troughcolor=主窗.主题["面板"],
             activebackground=主窗.主题["按钮热"],
             bd=0,
             relief="flat",
+            highlightthickness=0,
+            elementborderwidth=0,
             width=12,
         )
         self.横向滚动.pack(side="bottom", fill="x")
@@ -763,11 +768,11 @@ class 编辑器(tk.Frame):
     def 换主题(self):
         主题 = self.主窗.主题
         self.configure(bg=主题["编辑器"])
-        for 滚动条, 槽色 in ((self.滚动, 主题["窗口"]), (self.横向滚动, 主题["窗口"])):
+        for 滚动条 in (self.滚动, self.横向滚动):
             try:
                 滚动条.configure(
                     bg=主题["按钮"],
-                    troughcolor=槽色,
+                    troughcolor=主题["面板"],
                     activebackground=主题["按钮热"],
                 )
             except tk.TclError:
@@ -990,12 +995,16 @@ class 主窗口:
         self._高亮文档 = None
         self._轮询任务 = None
         self._缩放任务 = None
+        self._分栏比例 = None
         self._已退出 = False
         self._构建字体()
         self._建界面()
         self._绑快捷键()
         self.根.protocol("WM_DELETE_WINDOW", self.退出)
         self.根.bind("<Configure>", self._窗口缩放)
+        # 用户拖动分隔条后，记下新比例，缩放窗口时按它还原
+        for 序列 in ("<ButtonRelease-1>", "<B1-Motion>"):
+            self.分栏.bind(序列, self._记分栏比例, add="+")
         self.根.deiconify()
         self._设窗口尺寸()
         self._轮询任务 = self.根.after(60, self._轮询输出)
@@ -1007,12 +1016,14 @@ class 主窗口:
         self.根.after(10, self._启用拖放)
         self.根.after(300, self._启用拖放)
         self.根.after(40, self._应用窗口圆角)
+        # 去掉原生标题栏要在窗口真正显示之后；失败会安静退回原生栏
+        self.根.after(55, self._去掉原生标题栏)
         # 图标必须在窗口真正显示之后再设，否则会被 Tk 丢掉
         self.根.after(10, lambda: 设窗口图标(self.根))
         self._刷新标题()
 
     def _应用窗口圆角(self):
-        """Win11 上使用原生圆角窗口，并把标题栏染成主题色。"""
+        """Win11 上使用原生圆角窗口，并把边框染成主题色。"""
         try:
             标题色 = self.主题["标题栏"]
             圆角.窗口圆角(
@@ -1023,6 +1034,23 @@ class 主窗口:
             )
         except Exception:
             pass
+
+    def _去掉原生标题栏(self):
+        """隐藏 Windows 原生标题栏，改用自绘顶栏。
+
+        必须在窗口 map 之后调用；失败时安静退回原生标题栏，不影响使用。
+        """
+        try:
+            self._原生栏已去 = bool(圆角.隐藏标题栏(self.根))
+        except Exception:
+            self._原生栏已去 = False
+        # 去掉原生栏后窗口高度会多出约 30px，重排一次让内容贴合
+        if self._原生栏已去:
+            try:
+                self.根.update_idletasks()
+                self._定分栏()
+            except tk.TclError:
+                pass
 
     def _启用拖放(self):
         """接受把文件/文件夹拖进窗口。"""
@@ -1116,32 +1144,68 @@ class 主窗口:
             pass
 
     def _窗口缩放(self, 事件=None):
-        """窗口尺寸变化时保证编辑区不被压没。"""
+        """窗口尺寸变化时，按比例保住用户设定的分栏位置。
+
+        以前这里无条件按 30% 重算，导致两个问题：
+          1. 用户拖过分隔条后，点一下窗口就被还原；
+          2. 拖动窗口边缘时，Tk 先按旧布局重排、120ms 后才纠正，
+             视觉上像「撕裂」。
+
+        现在：记住用户拖动后的比例（_分栏比例），缩放时按比例还原；
+        用户没拖过时用默认 0.30。
+        """
         if 事件 is not None and 事件.widget is not self.根:
             return
+        # 防抖：拖动窗口时事件很密集，合并成一次处理，避免反复重排
         if getattr(self, "_缩放任务", None):
             try:
                 self.根.after_cancel(self._缩放任务)
             except tk.TclError:
                 pass
-        self._缩放任务 = self.根.after(120, self._定分栏)
+        self._缩放任务 = self.根.after(60, self._定分栏)
+
+    def _记分栏比例(self, _e=None):
+        """用户拖动分隔条后，记住下方占整栏的比例。"""
+        try:
+            总高 = self.分栏.winfo_height()
+            if 总高 < 200:
+                return
+            y = self.分栏.sash_coord(0)[1]
+            下 = 总高 - y
+            # 比例夹在合理区间，免得拖到极端后缩放时看不到编辑区
+            self._分栏比例 = max(0.12, min(0.72, 下 / float(总高)))
+        except (tk.TclError, IndexError):
+            pass
 
     def _定分栏(self):
-        """运行窗口占下方约 30%，并随窗口高度收缩。
+        """把分栏放到「用户设定比例」对应的位置。
 
-        小窗口下若还按固定下限给高度，编辑区会被挤得看不见，
-        所以上下限都跟着总高走。
+        只在启动时设默认值；之后完全跟随用户的拖动，缩放时按比例换算，
+        不再每次都强制拉回 30%。
         """
+        self._缩放任务 = None
         try:
             self.根.update_idletasks()
             总高 = self.分栏.winfo_height()
             if 总高 < 320:
                 return
-            下限 = max(130, min(190, int(总高 * 0.26)))
-            上限 = max(下限, min(340, int(总高 * 0.42)))
-            下 = max(下限, min(上限, int(总高 * 0.30)))
-            self.分栏.sash_place(0, 0, 总高 - 下)
-        except tk.TclError:
+            # 中部有 minsize=220，目标位置不能越过它，否则 sash_place 会被静默拒绝
+            上格最小 = 220
+            下格最小 = 90
+            比例 = getattr(self, "_分栏比例", None)
+            if 比例 is None:
+                下限 = max(130, min(190, int(总高 * 0.26)))
+                上限 = max(下限, min(340, int(总高 * 0.42)))
+                下 = max(下限, min(上限, int(总高 * 0.30)))
+                self._分栏比例 = 下 / float(总高)
+            else:
+                下 = int(总高 * 比例)
+            下 = max(下格最小, min(总高 - 上格最小, 下))
+            目标 = 总高 - 下
+            当前 = self.分栏.sash_coord(0)[1]
+            if abs(当前 - 目标) > 1:
+                self.分栏.sash_place(0, 0, 目标)
+        except (tk.TclError, IndexError):
             pass
 
     def _设窗口尺寸(self):
@@ -1243,7 +1307,15 @@ class 主窗口:
         self._建左工具条()
 
         self.分栏 = tk.PanedWindow(
-            self.主体, orient="vertical", bg=主题["窗口"], bd=0, sashwidth=5, sashrelief="flat"
+            self.主体,
+            orient="vertical",
+            bg=主题["窗口"],
+            bd=0,
+            sashwidth=5,
+            sashrelief="flat",
+            # 拖动分隔条时不实时重排内容（松手才重排），
+            # 否则每移动 1 像素就重绘一次编辑器与运行窗口，看起来像撕裂。
+            opaqueresize=False,
         )
         self.分栏.pack(side="left", fill="both", expand=True)
 
@@ -1266,16 +1338,17 @@ class 主窗口:
     # —— 顶部：集成式标题栏 + 工具条 + 左侧竖排 → 严格模仿 PyCharm 新 UI ——
 
     def _建标题栏(self):
-        """顶部条：应用标 + 菜单按钮 + 搜索框。
+        """自绘标题栏：应用标 + 菜单 + 文件名 + 搜索 + 窗口按钮。
 
-        标题、窗口按钮、图标都交给 Windows 原生标题栏（见 _应用窗口圆角），
-        这里不再重复显示「核工坊 v…」——以前两条并排，既重复又显得挤。
+        与 PyCharm 新 UI 一致：整条顶栏由应用自己画，Windows 原生标题栏被隐藏
+        （见 _去掉原生标题栏），这样配色、圆角、图标都能统一。
         """
         主题 = self.主题
-        self.标题栏 = 条 = tk.Frame(self.根, bg=主题["标题栏"], height=38)
+        self.标题栏 = 条 = tk.Frame(self.根, bg=主题["标题栏"], height=40)
         条.pack(side="top", fill="x")
         条.pack_propagate(False)
 
+        # 左侧：品牌图标
         self.品牌图 = tk.Label(
             条,
             image=self.图标["品牌"] if self.图标["品牌"] else None,
@@ -1288,35 +1361,117 @@ class 主窗口:
                 fg=主题["文本"],
                 font=("Microsoft YaHei UI", 11, "bold"),
             )
-        self.品牌图.pack(side="left", padx=(10, 4))
+        self.品牌图.pack(side="left", padx=(14, 10))
 
-        # 菜单按钮：原来是个「≡」，现在写明白是主菜单，并保留汉堡图标
+        # 汉堡菜单
         self.汉堡 = tk.Label(
             条,
-            text="☰  菜单",
+            text="☰",
             bg=主题["标题栏"],
             fg=主题["次要文本"],
-            font=界面字体,
-            padx=8,
+            font=("Microsoft YaHei UI", 12),
+            padx=10,
             pady=4,
             cursor="hand2",
         )
-        self.汉堡.pack(side="left", padx=(2, 0))
+        self.汉堡.pack(side="left", padx=(0, 4))
         挂提示(self.汉堡, "主菜单（文件 / 编辑 / 运行 / 视图 / 帮助）")
 
-        # 搜索框（PyCharm 的 Find Anything，这里做「查找」入口）
+        # 右侧：窗口按钮（关闭 / 最大化 / 最小化），PyCharm 风格自绘
+        self.窗口钮 = {}
+        for 键, 字, 命令, 提示 in (
+            ("关闭", "✕", self._关闭窗口, "关闭"),
+            ("最大化", "□", self._切换最大化, "最大化 / 还原"),
+            ("最小化", "—", self._最小化, "最小化"),
+        ):
+            钮 = tk.Label(
+                条,
+                text=字,
+                bg=主题["标题栏"],
+                fg=主题["次要文本"],
+                font=("Microsoft YaHei UI", 10),
+                width=4,
+                pady=8,
+                cursor="hand2",
+            )
+            钮.pack(side="right", padx=0)
+            钮.bind("<Button-1>", lambda e, c=命令: c())
+            # 悬停高亮：关闭按钮用红色，其余用灰底（与 PyCharm 一致）
+            if 键 == "关闭":
+                钮.bind("<Enter>", lambda e, b=钮: b.configure(bg="#C42B1C", fg="#FFFFFF"))
+                钮.bind("<Leave>", lambda e, b=钮: b.configure(bg=主题["标题栏"], fg=主题["次要文本"]))
+            else:
+                钮.bind("<Enter>", lambda e, b=钮: b.configure(bg=主题["工具条热"]))
+                钮.bind("<Leave>", lambda e, b=钮: b.configure(bg=主题["标题栏"]))
+            self.窗口钮[键] = 钮
+
+        # 搜索框（Find Anything）
         self.搜索框 = tk.Entry(
             条,
             bg=主题["面板"],
             fg=主题["文本"],
             insertbackground=主题["光标"],
             relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=主题["边框"],
+            highlightcolor=主题["强调"],
             font=界面字体,
             width=20,
         )
-        self.搜索框.pack(side="right", padx=(0, 10), pady=7, ipady=2)
+        self.搜索框.pack(side="right", padx=(0, 10), pady=9, ipady=2)
         self.搜索框.bind("<Return>", lambda e: self.查找替换())
         挂提示(self.搜索框, "搜索（直接按回车打开查找框）")
+
+        # 中间：当前文件名（替代原生标题栏的标题）
+        self.标题文字 = tk.Label(
+            条,
+            text="核工坊",
+            bg=主题["标题栏"],
+            fg=主题["文本"],
+            font=("Microsoft YaHei UI", 9),
+            anchor="center",
+        )
+        self.标题文字.pack(side="left", fill="x", expand=True, padx=(10, 10))
+
+        # 拖动标题栏移动窗口；双击最大化/还原
+        for 控件 in (条, self.标题文字):
+            控件.bind("<Button-1>", self._拖窗开始)
+            控件.bind("<B1-Motion>", self._拖窗移动)
+            控件.bind("<Double-1>", lambda e: self._切换最大化())
+
+    # —— 自绘标题栏的窗口操作 ——
+
+    def _拖窗开始(self, 事件):
+        self._拖窗偏移 = (事件.x_root - self.根.winfo_x(), 事件.y_root - self.根.winfo_y())
+
+    def _拖窗移动(self, 事件):
+        偏移 = getattr(self, "_拖窗偏移", None)
+        if not 偏移:
+            return
+        if self.根.state() == "zoomed":
+            return
+        self.根.geometry("+%d+%d" % (事件.x_root - 偏移[0], 事件.y_root - 偏移[1]))
+
+    def _最小化(self):
+        try:
+            self.根.iconify()
+        except tk.TclError:
+            pass
+
+    def _切换最大化(self):
+        try:
+            if self.根.state() == "zoomed":
+                self.根.state("normal")
+                self.窗口钮["最大化"].configure(text="□")
+            else:
+                self.根.state("zoomed")
+                self.窗口钮["最大化"].configure(text="❐")
+        except tk.TclError:
+            pass
+
+    def _关闭窗口(self):
+        self.退出()
 
     def _建主工具条(self):
         """文件操作 + 运行控制 + 右侧面包屑。
@@ -2185,15 +2340,17 @@ class 主窗口:
     def _刷新标题(self):
         名 = self._文档名(self.当前) if self.当前 else ""
         名 = 名.rstrip("*")
-        self.根.title(
-            "%s v%s — %s%s"
-            % (
-                标题,
-                内核.版本,
-                名 or "未打开文件",
-                " *" if (self.当前 and self.当前.已改) else "",
-            )
-        )
+        已改 = " ●" if (self.当前 and self.当前.已改) else ""
+        完整 = "%s v%s — %s%s" % (标题, 内核.版本, 名 or "未打开文件", 已改)
+        # 原生标题栏已隐藏，这里主要供任务栏与 Alt+Tab 显示
+        self.根.title(完整)
+        # 自绘标题栏显示「文件名 · 版本」，与 PyCharm 一致（文件名在前）
+        标 = getattr(self, "标题文字", None)
+        if 标 is not None and 标.winfo_exists():
+            try:
+                标.configure(text="%s%s" % (名 or "核工坊", 已改))
+            except tk.TclError:
+                pass
 
     def 当前编辑器(self):
         return self.当前

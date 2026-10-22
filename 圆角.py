@@ -26,11 +26,81 @@ DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWA_CAPTION_COLOR = 35
 DWMWA_BORDER_COLOR = 34
 
+# 窗口样式索引（GetWindowLongW / SetWindowLongW 的第二个参数）
+GWL_STYLE = -16
+
 
 def _dwm():
     import ctypes
 
     return ctypes.WinDLL("dwmapi", use_last_error=True)
+
+
+def 隐藏标题栏(根窗口):
+    """去掉 Windows 原生标题栏，但保留边框、阴影、贴边吸附与缩放能力。
+
+    做法：把窗口样式从 WS_CAPTION 改成 WS_POPUP|WS_THICKFRAME，
+    再给客户区加 WS_CAPTION 的「视觉边框」以保住阴影。
+    overrideredirect 那种做法会连缩放和阴影一起丢掉，所以不用它。
+    返回是否成功。
+    """
+    if not 可用:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32")
+        user32.GetParent.argtypes = [wintypes.HWND]
+        user32.GetParent.restype = wintypes.HWND
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            user32.GetWindowLongW.restype = ctypes.c_long
+            user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.SetWindowLongW.restype = ctypes.c_long
+            user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+        else:
+            user32.GetWindowLongW.restype = ctypes.c_long
+            user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.SetWindowLongW.restype = ctypes.c_long
+            user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+
+        根窗口.update_idletasks()
+        hwnd = user32.GetParent(根窗口.winfo_id()) or 根窗口.winfo_id()
+        样式 = user32.GetWindowLongW(hwnd, GWL_STYLE)
+
+        WS_CAPTION = 0x00C00000
+        WS_THICKFRAME = 0x00040000
+        WS_SYSMENU = 0x00080000
+        WS_MINIMIZEBOX = 0x00020000
+        WS_MAXIMIZEBOX = 0x00010000
+        WS_POPUP = 0x80000000
+
+        # 去掉原生标题栏，但保留可缩放 + 系统菜单（Alt+Space 仍可用）
+        新样式 = 样式 & ~WS_CAPTION
+        新样式 |= WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP
+        user32.SetWindowLongW(hwnd, GWL_STYLE, 新样式)
+
+        # 关键：让 DWM 仍然给它画边框与阴影（否则窗口像个无边框方块）
+        MARGINS = ctypes.c_int * 4
+        边距 = MARGINS(-1, -1, -1, -1)
+        try:
+            _dwm().DwmExtendFrameIntoClientArea(wintypes.HWND(hwnd), ctypes.byref(边距))
+        except Exception:
+            pass
+
+        # 让新样式生效
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_FRAMECHANGED = 0x0020
+        user32.SetWindowPos(
+            wintypes.HWND(hwnd), None, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        )
+        return True
+    except Exception:
+        return False
+
 
 
 def 窗口圆角(根窗口, 偏好=DWMWCP_ROUND, 标题栏色=None, 边框色=None, 深色=True):
