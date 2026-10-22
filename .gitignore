@@ -1,11 +1,18 @@
 # 构建产物
 /build/
+/build_*/
 /dist/
+/dist_*/
 *.spec
 
 # Python 缓存
 __pycache__/
 *.py[cod]
+
+# PyInstaller 中间文件（万一定义了自定义 workpath 落在此处）
+*.pkg
+*.pyz
+*.toc
 
 # 运行核语言时生成的未定义清单（由程序自动累积）
 未定义.txt
