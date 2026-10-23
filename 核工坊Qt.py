@@ -39,6 +39,15 @@ def 图标路径(名):
     return os.path.join(这里, "素材", 名)
 
 
+#: 项目树里不显示的条目。
+#: `_启动Qt.py` 是打包脚本自动生成的临时入口（已在 .gitignore 里），
+#: 留在项目树里只会让用户困惑「这个文件是干什么的」。
+_隐藏项 = (
+    "__pycache__", "build", "dist", "build_v001", "release",
+    "_启动Qt.py", "工坊配置.json", "未定义.txt",
+)
+
+
 def _默认项目目录():
     """打包版不能用 _MEIPASS 临时目录当项目根。
 
@@ -1092,7 +1101,7 @@ class 主窗(QMainWindow):
         except OSError:
             return
         for 条 in 项:
-            if 条.name.startswith(".") or 条.name in ("__pycache__", "build", "dist"):
+            if 条.name.startswith(".") or 条.name in _隐藏项:
                 continue
             if 条.is_dir():
                 子 = QTreeWidgetItem(节点, [条.name])

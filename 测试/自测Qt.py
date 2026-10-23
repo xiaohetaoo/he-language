@@ -221,16 +221,31 @@ def 主():
     _图 = _编.grab().toImage()
     _倍 = _图.width() / max(1, _编.width())
     _栏右 = int((_编.行号.geometry().x() + _编.行号.width()) * _倍)
+    _底色 = (0x1E1F22, 0x2B2D30, 0xF7F8FA, 0xFFFFFF)
+
+    def _找首文():
+        # 扫多个 y：只扫固定的 y=10 会偶发失败 —— 首行块的位置随字体度量
+        # 和首帧渲染时机略有变化（实测块 top=4，文字落在 y≈15~30）。
+        # 扫一段高度内的任意一行，只要有一点文字像素就算找到。
+        _图2 = _编.grab().toImage()
+        for _yy in (10, 16, 20, 26, 32, 40, 46):
+            _y2 = min(_图2.height() - 1, int(_yy * _倍))
+            for _x in range(_栏右, min(_图2.width(), _栏右 + 260)):
+                if (_图2.pixel(_x, _y2) & 0xFFFFFF) not in _底色:
+                    return _x, _yy
+        return None, None
+
     _首文 = None
-    _y = int(10 * _倍)
-    for _x in range(_栏右, min(_图.width(), _栏右 + 260)):
-        _c = _图.pixel(_x, _y) & 0xFFFFFF
-        if _c not in (0x1E1F22, 0x2B2D30, 0xF7F8FA, 0xFFFFFF):
-            _首文 = _x
+    for _重试 in range(5):
+        _首文, _命中y = _找首文()
+        if _首文 is not None:
             break
+        for _ in range(4):
+            应用.processEvents()
     检查(
         _首文 is not None and _首文 >= _栏右,
-        "第一行正文起点(%s) 在行号栏右侧(%d)" % (_首文, _栏右),
+        "第一行正文起点(%s @y=%s) 在行号栏右侧(%d)"
+        % (_首文, _命中y if _首文 else "-", _栏右),
     )
 
     print("[自动缩进不叠加]")
