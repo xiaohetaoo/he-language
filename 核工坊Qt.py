@@ -110,19 +110,17 @@ class 顶行(QWidget):
 
         布局.addStretch(1)
 
-        self.运行钮 = QLabel("▶")
+        self.运行钮 = QLabel()
         self.运行钮.setObjectName("runBtn")
         self.运行钮.setCursor(Qt.PointingHandCursor)
         self.运行钮.setToolTip("运行（F5）")
+        self.运行钮.setAlignment(Qt.AlignCenter)
+        self.运行钮.setPixmap(画图标("三角", "#1E1F22", 14))
+        self.运行钮.setFixedWidth(30)
         self.运行钮.mousePressEvent = lambda e: 主窗.运行()
         布局.addWidget(self.运行钮)
 
-        设 = QLabel("⚙")
-        设.setObjectName("topBtn")
-        设.setCursor(Qt.PointingHandCursor)
-        设.setToolTip("设置（Ctrl+,）")
-        设.mousePressEvent = lambda e: 主窗.打开设置()
-        布局.addWidget(设)
+        # 设置入口只在左侧竖条底部保留一个（顶行不再重复放齿轮）
 
         self.搜索 = QLineEdit()
         self.搜索.setObjectName("searchBox")
@@ -177,6 +175,80 @@ class 顶行(QWidget):
         super().mouseDoubleClickEvent(事件)
 
 
+def 画图标(形状, 颜色, 大小=18):
+    """自己画竖条图标。
+
+    以前用 ▤ ☰ ▶ ⚙ 这类符号当图标，全是细线条，缩到 18px 后彼此分不清
+    （用户反馈「功能图标太像了，没有区分度」）。这里改成实心几何形状 +
+    各自独立的颜色：文件夹/列表一眼能分辨，颜色再拉开一层区分。
+    """
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
+
+    倍 = 2  # 按 2 倍画再缩放，边缘更干净
+    图 = QPixmap(大小 * 倍, 大小 * 倍)
+    图.fill(Qt.transparent)
+    画 = QPainter(图)
+    画.setRenderHint(QPainter.Antialiasing, True)
+    色 = QColor(颜色)
+    S = 大小 * 倍
+    单位 = S / 18.0
+
+    def 点(x, y):
+        return QPointF(x * 单位, y * 单位)
+
+    if 形状 == "文件夹":
+        # 后板（带标签）
+        路 = QPainterPath()
+        路.moveTo(点(1.5, 4.5))
+        路.lineTo(点(6.5, 4.5))
+        路.lineTo(点(8.0, 6.5))
+        路.lineTo(点(16.5, 6.5))
+        路.lineTo(点(16.5, 14.5))
+        路.lineTo(点(1.5, 14.5))
+        路.closeSubpath()
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawPath(路)
+        # 前板（略亮），形成文件夹的层次
+        亮 = QColor(色).lighter(125)
+        画.setBrush(QBrush(亮))
+        画.drawRoundedRect(QRectF(点(1.5, 7.5), 点(16.5, 14.5)), 1.6 * 单位, 1.6 * 单位)
+
+    elif 形状 == "列表":
+        # 左侧三个圆点 + 右侧三条横线（结构/大纲）
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        for i, y in enumerate((4.5, 9.0, 13.5)):
+            画.drawEllipse(点(3.0, y), 1.5 * 单位, 1.5 * 单位)
+            宽 = 8.5 if i != 1 else 6.0  # 中间那条短一点，更像大纲
+            画.drawRoundedRect(QRectF(点(6.5, y - 1.0), 点(6.5 + 宽, y + 1.0)), 0.8 * 单位, 0.8 * 单位)
+
+    elif 形状 == "三角":
+        # 实心播放三角
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawPolygon(QPolygonF([点(6.0, 4.0), 点(14.5, 9.0), 点(6.0, 14.0)]))
+
+    elif 形状 == "齿轮":
+        画.setPen(QPen(色, 1.7 * 单位))
+        画.setBrush(Qt.NoBrush)
+        # 用「滑块」造型代替齿轮：三条带柄横线，小尺寸下更清楚
+        for y, 柄 in ((5.0, 6.5), (9.0, 11.5), (13.0, 7.5)):
+            画.drawLine(点(3.0, y), 点(15.0, y))
+            画.setBrush(QBrush(色))
+            画.drawEllipse(点(柄, y), 1.7 * 单位, 1.7 * 单位)
+            画.setBrush(Qt.NoBrush)
+
+    elif 形状 == "圆点":
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawEllipse(点(9.0, 9.0), 4.0 * 单位, 4.0 * 单位)
+
+    画.end()
+    return 图.scaled(大小, 大小, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
 class 左竖条(QWidget):
     """左侧竖排图标栏（PyCharm 的工具窗口按钮）。"""
 
@@ -190,29 +262,44 @@ class 左竖条(QWidget):
         布局.setContentsMargins(6, 8, 6, 8)
         布局.setSpacing(6)
 
+        # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别
         self.钮们 = {}
-        for 键, 字, 提示, 命令 in (
-            ("项目", "▤", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
-            ("结构", "☰", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
-            ("运行", "▶", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
-            ("设置", "⚙", "设置（Ctrl+,）", lambda: 主窗.打开设置()),
+        for 键, 形状, 颜色, 提示, 命令 in (
+            ("项目", "文件夹", "#6C9EF8", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
+            ("结构", "列表", "#B58EF8", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
+            ("运行", "三角", "#4CAF6E", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
         ):
-            钮 = QLabel(字)
+            钮 = QLabel()
             钮.setObjectName("railBtn")
             钮.setAlignment(Qt.AlignCenter)
             钮.setFixedSize(32, 32)
             钮.setCursor(Qt.PointingHandCursor)
             钮.setToolTip(提示)
+            钮.setPixmap(画图标(形状, 颜色))
             钮.mousePressEvent = lambda e, c=命令: c()
             布局.addWidget(钮)
             self.钮们[键] = 钮
 
         布局.addStretch(1)
-        self.状态点 = QLabel("●")
+
+        # 设置放最底下，和 PyCharm 一致；顶行不再重复放齿轮
+        设 = QLabel()
+        设.setObjectName("railBtn")
+        设.setAlignment(Qt.AlignCenter)
+        设.setFixedSize(32, 32)
+        设.setCursor(Qt.PointingHandCursor)
+        设.setToolTip("设置（Ctrl+,）")
+        设.setPixmap(画图标("齿轮", "#9DA0A8"))
+        设.mousePressEvent = lambda e: 主窗.打开设置()
+        布局.addWidget(设)
+        self.钮们["设置"] = 设
+
+        self.状态点 = QLabel()
         self.状态点.setObjectName("railBtn")
         self.状态点.setAlignment(Qt.AlignCenter)
         self.状态点.setFixedSize(32, 32)
         self.状态点.setToolTip("运行状态")
+        self.状态点.setPixmap(画图标("圆点", "#6AAB73"))
         布局.addWidget(self.状态点)
 
 
@@ -649,7 +736,6 @@ class 主窗(QMainWindow):
     def 新建(self):
         编 = 编辑器(self)
         编.已改 = False
-        编.光标移动.connect(self.更新状态栏)
         编.hide()
         self.文档集.append(编)
         self.标签栏.addTab("未命名")
@@ -667,11 +753,6 @@ class 主窗(QMainWindow):
         self.当前 = 编
         self._刷新标题()
         self.更新状态栏()
-        try:
-            编.光标移动.connect(self.更新状态栏)
-        except (RuntimeError, TypeError):
-            # 已经连过或对象即将销毁；不影响功能
-            pass
         编.setFocus()
 
     def _标签按下(self, 事件):
@@ -799,7 +880,6 @@ class 主窗(QMainWindow):
             self.状态("这不是文本文件：%s" % os.path.basename(路径))
             return None
         编 = 编辑器(self)
-        编.光标移动.connect(self.更新状态栏)
         编.文件路径 = os.path.abspath(路径)
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
         编.hide()

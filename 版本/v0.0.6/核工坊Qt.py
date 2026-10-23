@@ -110,19 +110,17 @@ class 顶行(QWidget):
 
         布局.addStretch(1)
 
-        self.运行钮 = QLabel("▶")
+        self.运行钮 = QLabel()
         self.运行钮.setObjectName("runBtn")
         self.运行钮.setCursor(Qt.PointingHandCursor)
         self.运行钮.setToolTip("运行（F5）")
+        self.运行钮.setAlignment(Qt.AlignCenter)
+        self.运行钮.setPixmap(画图标("三角", "#1E1F22", 14))
+        self.运行钮.setFixedWidth(30)
         self.运行钮.mousePressEvent = lambda e: 主窗.运行()
         布局.addWidget(self.运行钮)
 
-        设 = QLabel("⚙")
-        设.setObjectName("topBtn")
-        设.setCursor(Qt.PointingHandCursor)
-        设.setToolTip("设置（Ctrl+,）")
-        设.mousePressEvent = lambda e: 主窗.打开设置()
-        布局.addWidget(设)
+        # 设置入口只在左侧竖条底部保留一个（顶行不再重复放齿轮）
 
         self.搜索 = QLineEdit()
         self.搜索.setObjectName("searchBox")
@@ -177,6 +175,80 @@ class 顶行(QWidget):
         super().mouseDoubleClickEvent(事件)
 
 
+def 画图标(形状, 颜色, 大小=18):
+    """自己画竖条图标。
+
+    以前用 ▤ ☰ ▶ ⚙ 这类符号当图标，全是细线条，缩到 18px 后彼此分不清
+    （用户反馈「功能图标太像了，没有区分度」）。这里改成实心几何形状 +
+    各自独立的颜色：文件夹/列表一眼能分辨，颜色再拉开一层区分。
+    """
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
+
+    倍 = 2  # 按 2 倍画再缩放，边缘更干净
+    图 = QPixmap(大小 * 倍, 大小 * 倍)
+    图.fill(Qt.transparent)
+    画 = QPainter(图)
+    画.setRenderHint(QPainter.Antialiasing, True)
+    色 = QColor(颜色)
+    S = 大小 * 倍
+    单位 = S / 18.0
+
+    def 点(x, y):
+        return QPointF(x * 单位, y * 单位)
+
+    if 形状 == "文件夹":
+        # 后板（带标签）
+        路 = QPainterPath()
+        路.moveTo(点(1.5, 4.5))
+        路.lineTo(点(6.5, 4.5))
+        路.lineTo(点(8.0, 6.5))
+        路.lineTo(点(16.5, 6.5))
+        路.lineTo(点(16.5, 14.5))
+        路.lineTo(点(1.5, 14.5))
+        路.closeSubpath()
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawPath(路)
+        # 前板（略亮），形成文件夹的层次
+        亮 = QColor(色).lighter(125)
+        画.setBrush(QBrush(亮))
+        画.drawRoundedRect(QRectF(点(1.5, 7.5), 点(16.5, 14.5)), 1.6 * 单位, 1.6 * 单位)
+
+    elif 形状 == "列表":
+        # 左侧三个圆点 + 右侧三条横线（结构/大纲）
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        for i, y in enumerate((4.5, 9.0, 13.5)):
+            画.drawEllipse(点(3.0, y), 1.5 * 单位, 1.5 * 单位)
+            宽 = 8.5 if i != 1 else 6.0  # 中间那条短一点，更像大纲
+            画.drawRoundedRect(QRectF(点(6.5, y - 1.0), 点(6.5 + 宽, y + 1.0)), 0.8 * 单位, 0.8 * 单位)
+
+    elif 形状 == "三角":
+        # 实心播放三角
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawPolygon(QPolygonF([点(6.0, 4.0), 点(14.5, 9.0), 点(6.0, 14.0)]))
+
+    elif 形状 == "齿轮":
+        画.setPen(QPen(色, 1.7 * 单位))
+        画.setBrush(Qt.NoBrush)
+        # 用「滑块」造型代替齿轮：三条带柄横线，小尺寸下更清楚
+        for y, 柄 in ((5.0, 6.5), (9.0, 11.5), (13.0, 7.5)):
+            画.drawLine(点(3.0, y), 点(15.0, y))
+            画.setBrush(QBrush(色))
+            画.drawEllipse(点(柄, y), 1.7 * 单位, 1.7 * 单位)
+            画.setBrush(Qt.NoBrush)
+
+    elif 形状 == "圆点":
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawEllipse(点(9.0, 9.0), 4.0 * 单位, 4.0 * 单位)
+
+    画.end()
+    return 图.scaled(大小, 大小, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
 class 左竖条(QWidget):
     """左侧竖排图标栏（PyCharm 的工具窗口按钮）。"""
 
@@ -190,29 +262,44 @@ class 左竖条(QWidget):
         布局.setContentsMargins(6, 8, 6, 8)
         布局.setSpacing(6)
 
+        # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别
         self.钮们 = {}
-        for 键, 字, 提示, 命令 in (
-            ("项目", "▤", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
-            ("结构", "☰", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
-            ("运行", "▶", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
-            ("设置", "⚙", "设置（Ctrl+,）", lambda: 主窗.打开设置()),
+        for 键, 形状, 颜色, 提示, 命令 in (
+            ("项目", "文件夹", "#6C9EF8", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
+            ("结构", "列表", "#B58EF8", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
+            ("运行", "三角", "#4CAF6E", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
         ):
-            钮 = QLabel(字)
+            钮 = QLabel()
             钮.setObjectName("railBtn")
             钮.setAlignment(Qt.AlignCenter)
             钮.setFixedSize(32, 32)
             钮.setCursor(Qt.PointingHandCursor)
             钮.setToolTip(提示)
+            钮.setPixmap(画图标(形状, 颜色))
             钮.mousePressEvent = lambda e, c=命令: c()
             布局.addWidget(钮)
             self.钮们[键] = 钮
 
         布局.addStretch(1)
-        self.状态点 = QLabel("●")
+
+        # 设置放最底下，和 PyCharm 一致；顶行不再重复放齿轮
+        设 = QLabel()
+        设.setObjectName("railBtn")
+        设.setAlignment(Qt.AlignCenter)
+        设.setFixedSize(32, 32)
+        设.setCursor(Qt.PointingHandCursor)
+        设.setToolTip("设置（Ctrl+,）")
+        设.setPixmap(画图标("齿轮", "#9DA0A8"))
+        设.mousePressEvent = lambda e: 主窗.打开设置()
+        布局.addWidget(设)
+        self.钮们["设置"] = 设
+
+        self.状态点 = QLabel()
         self.状态点.setObjectName("railBtn")
         self.状态点.setAlignment(Qt.AlignCenter)
         self.状态点.setFixedSize(32, 32)
         self.状态点.setToolTip("运行状态")
+        self.状态点.setPixmap(画图标("圆点", "#6AAB73"))
         布局.addWidget(self.状态点)
 
 
@@ -360,6 +447,8 @@ class 主窗(QMainWindow):
         self.树 = QTreeWidget()
         self.树.setHeaderHidden(True)
         self.树.itemDoubleClicked.connect(self._双击树)
+        self.树.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.树.customContextMenuRequested.connect(self._树右键)
         布局.addWidget(self.树, 1)
 
         框.setMinimumWidth(180)
@@ -377,6 +466,10 @@ class 主窗(QMainWindow):
         self.标签栏.currentChanged.connect(self._切标签)
         self.标签栏.setTabsClosable(True)
         self.标签栏.tabCloseRequested.connect(self._关标签)
+        # 中键点击标签关闭（与浏览器/PyCharm 一致）；右键弹菜单
+        self.标签栏.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.标签栏.customContextMenuRequested.connect(self._标签右键)
+        self.标签栏.mousePressEvent = self._标签按下
         布局.addWidget(self.标签栏)
 
         self.屑 = QLabel("  ")
@@ -554,6 +647,7 @@ class 主窗(QMainWindow):
             ("Ctrl+Shift+S", self.另存为),
             ("Ctrl+N", self.新建),
             ("Ctrl+O", self.打开文件),
+            ("Ctrl+P", self.快速打开),
             ("Ctrl+W", self.关闭当前),
             ("Ctrl+F", self.查找),
             ("Ctrl+G", self.跳到行),
@@ -565,15 +659,83 @@ class 主窗(QMainWindow):
             ("Ctrl+1", self.切换项目栏),
             ("Ctrl+2", self.切换对照表),
             ("Ctrl+3", self.切换运行窗),
+            ("Ctrl+Tab", lambda: self._轮换标签(1)),
+            ("Ctrl+Shift+Tab", lambda: self._轮换标签(-1)),
+            ("F2", self.重命名当前),
+            ("Ctrl+Shift+F", self.在项目中查找),
         ):
             QShortcut(QKeySequence(键), self).activated.connect(动作)
+
+    def _轮换标签(self, 方向):
+        """Ctrl+Tab 在标签间循环切换。"""
+        if self.标签栏.count() < 2:
+            return
+        当前 = self.标签栏.currentIndex()
+        新 = (当前 + 方向) % self.标签栏.count()
+        self.标签栏.setCurrentIndex(新)
+
+    def 重命名当前(self):
+        """F2 重命名当前文件（另存为新名字后替换旧标签）。"""
+        if self.当前 is None or not self.当前.文件路径:
+            self.状态("先保存文件再重命名")
+            return
+        from PySide6.QtWidgets import QInputDialog
+
+        旧名 = os.path.basename(self.当前.文件路径)
+        新名, 确定 = QInputDialog.getText(self, "重命名", "新文件名：", text=旧名)
+        if not 确定 or not 新名 or 新名 == 旧名:
+            return
+        旧路径 = self.当前.文件路径
+        新路径 = os.path.join(os.path.dirname(旧路径), 新名)
+        try:
+            os.rename(旧路径, 新路径)
+        except OSError as e:
+            self.状态("重命名失败：%s" % e)
+            return
+        self.当前.文件路径 = 新路径
+        self.刷新标签(self.当前)
+        self._刷新标题()
+        self.状态("已重命名为 %s" % 新名)
+
+    def 在项目中查找(self):
+        """Ctrl+Shift+F：在项目所有 .xht 里搜索文字，结果列在控制台。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        词, 确定 = QInputDialog.getText(self, "在项目中查找", "要查找的文字：")
+        if not 确定 or not 词:
+            return
+        命中 = 0
+        self.清空控制台()
+        self.控制台.appendPlainText("在项目中查找：%s\n" % 词)
+        for 目录, 子目录, 文件 in os.walk(self.项目目录):
+            子目录[:] = [
+                d for d in 子目录
+                if not d.startswith(".") and d not in ("__pycache__", "build", "dist", "版本")
+            ]
+            for 名 in 文件:
+                if not 名.endswith(".xht"):
+                    continue
+                全 = os.path.join(目录, 名)
+                try:
+                    with open(全, encoding="utf-8", errors="replace") as f:
+                        行们 = f.readlines()
+                except OSError:
+                    continue
+                for 号, 行 in enumerate(行们, 1):
+                    if 词 in 行:
+                        命中 += 1
+                        相对 = os.path.relpath(全, self.项目目录)
+                        self.控制台.appendPlainText(
+                            "%s:%d:  %s" % (相对, 号, 行.rstrip())
+                        )
+        self.控制台.appendPlainText("\n共 %d 处" % 命中)
+        self.状态("项目内找到 %d 处" % 命中)
 
     # ================= 文档管理 =================
 
     def 新建(self):
         编 = 编辑器(self)
         编.已改 = False
-        编.光标移动.connect(self.更新状态栏)
         编.hide()
         self.文档集.append(编)
         self.标签栏.addTab("未命名")
@@ -591,12 +753,54 @@ class 主窗(QMainWindow):
         self.当前 = 编
         self._刷新标题()
         self.更新状态栏()
-        try:
-            编.光标移动.connect(self.更新状态栏)
-        except (RuntimeError, TypeError):
-            # 已经连过或对象即将销毁；不影响功能
-            pass
         编.setFocus()
+
+    def _标签按下(self, 事件):
+        索引 = self.标签栏.tabAt(事件.position().toPoint())
+        if 事件.button() == Qt.MiddleButton and 索引 >= 0:
+            self._关标签(索引)
+            return
+        QTabBar.mousePressEvent(self.标签栏, 事件)
+
+    def _标签右键(self, 位置):
+        索引 = self.标签栏.tabAt(位置)
+        if 索引 < 0:
+            return
+        菜单 = QMenu(self)
+        for 名, 命令 in (
+            ("关闭", lambda: self._关标签(索引)),
+            ("关闭其他", lambda: self._关闭其他标签(索引)),
+            ("复制文件路径", lambda: self._复制路径(索引)),
+            ("在文件管理器中显示", lambda: self._在管理器显示(索引)),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            菜单.addAction(动作)
+        菜单.exec(self.标签栏.mapToGlobal(位置))
+
+    def _关闭其他标签(self, 保留):
+        保留文档 = self.文档集[保留] if 0 <= 保留 < len(self.文档集) else None
+        for 编 in list(self.文档集):
+            if 编 is not 保留文档:
+                编.已改 = False
+                self.关闭文档(编, 强制=True)
+
+    def _复制路径(self, 索引):
+        if 0 <= 索引 < len(self.文档集):
+            路径 = self.文档集[索引].文件路径
+            if 路径:
+                应用 = QApplication.instance()
+                应用.clipboard().setText(路径)
+                self.状态("路径已复制")
+
+    def _在管理器显示(self, 索引):
+        if 0 <= 索引 < len(self.文档集):
+            路径 = self.文档集[索引].文件路径
+            if 路径 and os.path.exists(路径):
+                try:
+                    subprocess.run(["explorer", "/select,", os.path.normpath(路径)])
+                except OSError:
+                    self.状态("打不开文件管理器")
 
     def _切标签(self, 索引):
         if 0 <= 索引 < len(self.文档集):
@@ -676,7 +880,6 @@ class 主窗(QMainWindow):
             self.状态("这不是文本文件：%s" % os.path.basename(路径))
             return None
         编 = 编辑器(self)
-        编.光标移动.connect(self.更新状态栏)
         编.文件路径 = os.path.abspath(路径)
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
         编.hide()
@@ -779,6 +982,49 @@ class 主窗(QMainWindow):
         elif os.path.isfile(路径):
             self.打开(路径)
 
+    def _树右键(self, 位置):
+        项 = self.树.itemAt(位置)
+        if 项 is None:
+            return
+        路径 = 项.data(0, Qt.UserRole)
+        if not 路径:
+            return
+        self.树.setCurrentItem(项)
+        菜单 = QMenu(self)
+        if os.path.isdir(路径):
+            for 名, 命令 in (
+                ("设为项目文件夹", lambda: self.装载项目树(路径)),
+                ("在文件管理器中打开", lambda: self._在管理器显示路径(路径)),
+            ):
+                动作 = QAction(名, self)
+                动作.triggered.connect(lambda _=False, c=命令: c())
+                菜单.addAction(动作)
+        else:
+            for 名, 命令 in (
+                ("打开", lambda: self.打开(路径)),
+                ("复制路径", lambda: QApplication.instance().clipboard().setText(路径)),
+                ("在文件管理器中显示", lambda: self._在管理器显示路径(路径)),
+            ):
+                动作 = QAction(名, self)
+                动作.triggered.connect(lambda _=False, c=命令: c())
+                菜单.addAction(动作)
+        菜单.addSeparator()
+        刷新 = QAction("刷新项目树", self)
+        刷新.triggered.connect(lambda: self.装载项目树(self.项目目录))
+        菜单.addAction(刷新)
+        菜单.exec(self.树.mapToGlobal(位置))
+
+    def _在管理器显示路径(self, 路径):
+        if not os.path.exists(路径):
+            return
+        try:
+            if os.path.isdir(路径):
+                subprocess.run(["explorer", os.path.normpath(路径)])
+            else:
+                subprocess.run(["explorer", "/select,", os.path.normpath(路径)])
+        except OSError:
+            self.状态("打不开文件管理器")
+
     def 收起项目树(self):
         self.树.collapseAll()
         self.状态("已收起项目树")
@@ -797,6 +1043,21 @@ class 主窗(QMainWindow):
         self._运行可见 = not self._运行可见
         self.运行框.setVisible(self._运行可见)
         self.状态("运行窗口已%s" % ("显示" if self._运行可见 else "隐藏"))
+
+    def 切换行号(self):
+        self.显示行号 = not self.显示行号
+        for d in self.文档集:
+            d.行号.setVisible(self.显示行号)
+            d._更新行号宽()
+        self.状态("行号已%s" % ("显示" if self.显示行号 else "隐藏"))
+        self.存配置()
+
+    def 切换缩进线(self):
+        self.显示缩进线 = not self.显示缩进线
+        for d in self.文档集:
+            d.update()
+        self.状态("缩进参考线已%s" % ("显示" if self.显示缩进线 else "隐藏"))
+        self.存配置()
 
     # ================= 运行 =================
 
@@ -975,6 +1236,15 @@ class 主窗(QMainWindow):
         if self.当前:
             self.当前.切换注释()
 
+    def 快速打开(self):
+        try:
+            import 快速打开
+
+            self._快速 = 快速打开.快速打开(self)
+            self._快速.exec()
+        except Exception as e:  # noqa: BLE001
+            self.状态("快速打开失败：%s" % e)
+
     def 查找(self):
         """Ctrl+F：优先用顶行搜索框的内容，否则打开查找对话框。"""
         文 = self.顶行.搜索.text().strip()
@@ -1051,6 +1321,7 @@ class 主窗(QMainWindow):
         for 名, 命令 in (
             ("新建", self.新建),
             ("打开…", self.打开文件),
+            ("快速打开…", self.快速打开),
             ("打开文件夹…", self.选择项目目录),
             ("保存", self.保存当前),
             ("另存为…", self.另存为),
@@ -1079,6 +1350,22 @@ class 主窗(QMainWindow):
         for 名, 命令 in (
             ("撤销", lambda: self.当前 and self.当前.undo()),
             ("重做", lambda: self.当前 and self.当前.redo()),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            编.addAction(动作)
+        编.addSeparator()
+        for 名, 命令 in (
+            ("剪切", lambda: self.当前 and self.当前.cut()),
+            ("复制", lambda: self.当前 and self.当前.copy()),
+            ("粘贴", lambda: self.当前 and self.当前.paste()),
+            ("全选", lambda: self.当前 and self.当前.selectAll()),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            编.addAction(动作)
+        编.addSeparator()
+        for 名, 命令 in (
             ("注释 / 取消注释", self.切换注释),
             ("查找 / 替换…", self.查找),
             ("转到行…", self.跳到行),
@@ -1107,6 +1394,8 @@ class 主窗(QMainWindow):
             ("项目栏", self.切换项目栏),
             ("语法对照表", self.切换对照表),
             ("运行窗口", self.切换运行窗),
+            ("显示行号", self.切换行号),
+            ("显示缩进参考线", self.切换缩进线),
             ("增大字号", lambda: self.改字号(1)),
             ("减小字号", lambda: self.改字号(-1)),
         ):
@@ -1218,10 +1507,16 @@ class 主窗(QMainWindow):
         self.activateWindow()
 
 
-def 启动():
+def 启动(参数=None):
     应用 = QApplication.instance() or QApplication(sys.argv)
     应用.setApplicationName("核工坊")
     窗 = 主窗()
+    # 双击 .xht 文件时，系统会把路径作为参数传进来，直接打开它
+    参数 = 参数 if 参数 is not None else sys.argv[1:]
+    for 项 in 参数:
+        if os.path.isfile(项):
+            窗.打开(项)
+            break
     窗.show()
     return 应用.exec()
 

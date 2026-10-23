@@ -79,7 +79,7 @@ def 主():
             "    return 核工坊Qt.启动()\n\n"
             "def _自检(输出目录):\n"
             "    import json, time\n"
-            "    from PySide6.QtWidgets import QApplication\n"
+            "    from PySide6.QtWidgets import QApplication, QLabel as _QLabel\n"
             "    import 核工坊Qt, 核\n"
             "    基 = getattr(sys, '_MEIPASS', 这里)\n"
             "    os.makedirs(输出目录, exist_ok=True)\n"
@@ -96,6 +96,8 @@ def 主():
             "        '界面版本': 核.版本,\n"
             "        '顶行': 窗.顶行.项目名.text(),\n"
             "        '竖条按钮': list(窗.竖条.钮们),\n"
+            "        '竖条图标齐全': all(not b.pixmap().isNull() for b in 窗.竖条.钮们.values()),\n"
+            "        '顶行有设置': any('设置' in c.toolTip() for c in 窗.顶行.findChildren(_QLabel)),\n"
             "        '标签数': 窗.标签栏.count(),\n"
             "        '图标存在': os.path.exists(os.path.join(基, '素材', '核图标.ico')),\n"
             "        '对照表行数': len(窗.对照.toPlainText().splitlines()),\n"
@@ -214,10 +216,24 @@ def 校验产物(产物, 根目录):
         问题.append("对照表没填充")
     if not 报告.get("竖条按钮"):
         问题.append("左侧竖条按钮缺失")
+    if not 报告.get("竖条图标齐全"):
+        问题.append("竖条图标没画出来（pixmap 为空）")
+    if 报告.get("顶行有设置"):
+        问题.append("顶行重复出现了设置入口")
 
     print("自检结果：")
-    for 键 in ("运行方式", "界面版本", "顶行", "标签数", "对照表行数", "图标存在"):
-        print("  %-10s %s" % (键, 报告.get(键)))
+    for 键 in (
+        "运行方式",
+        "界面版本",
+        "顶行",
+        "竖条按钮",
+        "竖条图标齐全",
+        "顶行有设置",
+        "标签数",
+        "对照表行数",
+        "图标存在",
+    ):
+        print("  %-12s %s" % (键, 报告.get(键)))
 
     if 问题:
         print("\n自检不通过：")

@@ -9,7 +9,7 @@
 
 import re
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen, QTextCharFormat,
     QTextCursor, QSyntaxHighlighter, QKeyEvent,
@@ -163,11 +163,26 @@ class 编辑器(QPlainTextEdit):
         self.textChanged.connect(self._文本变化)
 
         self.高亮 = 高亮器(self.document(), 主窗)
+
+        # 界面刷新去抖器：文本/光标变化都攒到这里，避免在输入过程中
+        # 同步改窗口标题和状态栏（那会引起重排重绘并丢字）
+        self._界面刷新任务 = QTimer(self)
+        self._界面刷新任务.setSingleShot(True)
+        self._界面刷新任务.setInterval(30)
+        self._界面刷新任务.timeout.connect(self._补记已改)
+        self.cursorPositionChanged.connect(self._排队刷新界面)
+
         # 尊重主窗口的「显示行号」开关
         if not getattr(主窗, "显示行号", True):
             self.行号.setVisible(False)
         self._更新行号宽()
         self._当前行变化()
+
+    def _排队刷新界面(self, *_):
+        """光标动了也走同一个去抖器（不直接刷 UI）。"""
+        任务 = getattr(self, "_界面刷新任务", None)
+        if 任务 is not None:
+            任务.start(30)
 
     # —— 字体与主题 ——
 
@@ -222,14 +237,29 @@ class 编辑器(QPlainTextEdit):
         self.光标移动.emit()
 
     def _文本变化(self):
+        """文本变了。这里只做最轻的记账，重的 UI 更新一律延后。
+
+        教训：以前在这里同步调 `更新状态栏()` 和 `_刷新标题()`，
+        它们会改状态栏文字和窗口标题，引起重排重绘并重入事件循环；
+        连续快速输入（尤其配合输入法）时会丢字，用户看到的就是「吞字」。
+        现在改成去抖：无论触发多少次，只在一个事件循环之后做一次。
+        """
         if getattr(self, "_载入中", False):
             return
         if not self.已改:
             self.已改 = True
             self.主窗.刷新标签(self)
-            # 标题栏也要跟着显示 ●，否则用户看不出这个文件有未保存改动
-            if self.主窗.当前 is self:
-                self.主窗._刷新标题()
+        # 去抖调度（_排重界面刷新 由编辑器构造时创建）
+        任务 = getattr(self, "_界面刷新任务", None)
+        if 任务 is not None:
+            任务.start(30)
+
+    def _补记已改(self):
+        """延后执行的界面刷新：标题栏 ● 与状态栏行列。"""
+        if getattr(self, "_载入中", False):
+            return
+        if self.主窗.当前 is self:
+            self.主窗._刷新标题()
         self.主窗.更新状态栏()
 
     def paintEvent(self, 事件):
@@ -277,6 +307,15 @@ class 编辑器(QPlainTextEdit):
 
     # —— 键盘行为 ——
 
+    def _输入法组字中(self):
+        """输入法候选窗是否正开着（正在组字/联想）。异常一律当作没开。"""
+        try:
+            from PySide6.QtGui import QGuiApplication
+            法 = QGuiApplication.inputMethod()
+            return bool(法 and 法.isVisible())
+        except Exception:
+            return False
+
     配对表 = {
         "(": ")", "[": "]", "{": "}", "'": "'", '"': '"',
         "（": "）", "【": "】", "｛": "｝",
@@ -295,12 +334,15 @@ class 编辑器(QPlainTextEdit):
         if 键 == Qt.Key_Backtab:
             self._缩进选中行(-1)
             return
-        # 自动配对括号与引号
-        if 文本 in self.配对表 and not 事件.modifiers():
+        # 自动配对括号与引号。
+        # 中文输入法正在组字时一律让路：IME 用 ' 和 " 触发中文标点，
+        # 若这里抢先生成一对英文引号并 return，输入法就收不到这次按键，
+        # 用户会觉得「标点被吞了、打不出来」。
+        if 文本 in self.配对表 and not 事件.modifiers() and not self._输入法组字中():
             self._自动配对(文本, self.配对表[文本])
             return
         # 输入右括号时，若紧邻的正是它，直接跳过（不重复插入）
-        if 文本 and 文本 in self.配对表.values():
+        if 文本 and 文本 in self.配对表.values() and not self._输入法组字中():
             游 = self.textCursor()
             if not 游.hasSelection() and 游.block().text()[游.positionInBlock():游.positionInBlock() + 1] == 文本:
                 游.movePosition(QTextCursor.Right)

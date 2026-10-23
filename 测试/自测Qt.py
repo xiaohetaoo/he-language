@@ -176,6 +176,67 @@ def 主():
     检查(cfg.get("字号") == 15, "字号已写入配置")
     检查("项目目录" in cfg, "项目目录已记录")
 
+    print("[图标区分度]")
+    # 用户反馈「功能图标太像了，没有区分度」：改成自绘形状 + 各自颜色，
+    # 这里锁住「每个按钮都有图，且两两不同」。
+    图们 = {}
+    for 键, 钮 in 窗.竖条.钮们.items():
+        pm = 钮.pixmap()
+        检查(not pm.isNull(), "%s 按钮有图标" % 键)
+        图们[键] = pm.toImage()
+    键们 = sorted(图们)
+    相同对 = []
+    for i in range(len(键们)):
+        for j in range(i + 1, len(键们)):
+            if 图们[键们[i]] == 图们[键们[j]]:
+                相同对.append((键们[i], 键们[j]))
+    检查(not 相同对, "竖条图标两两不同" + ("（重复：%s）" % 相同对 if 相同对 else ""))
+
+    print("[设置入口唯一]")
+    from PySide6.QtWidgets import QLabel as _QL
+
+    顶行钮提示 = [c.toolTip() for c in 窗.顶行.findChildren(_QL)]
+    检查(
+        not any("设置" in t for t in 顶行钮提示),
+        "顶行不再重复放设置入口",
+    )
+    检查("设置" in 窗.竖条.钮们, "竖条保留唯一设置入口")
+
+    print("[输入不吞字]")
+    import inspect
+
+    import 编辑器 as _编辑器
+
+    变化源 = inspect.getsource(_编辑器.编辑器._文本变化)
+    # 只看真正的调用（docstring 里提到这两个名字是刻意写下的教训，不算）
+    检查("self.主窗.更新状态栏(" not in 变化源, "文本变化里不再同步刷状态栏")
+    检查("self.主窗._刷新标题(" not in 变化源, "文本变化里不再同步改标题")
+    补记源 = inspect.getsource(_编辑器.编辑器._补记已改)
+    检查("更新状态栏" in 补记源, "延后刷新里确实刷状态栏")
+    检查(hasattr(窗.当前, "_界面刷新任务"), "编辑器有去抖定时器")
+    键源 = inspect.getsource(_编辑器.编辑器.keyPressEvent)
+    检查("_输入法组字中" in 键源, "自动配对给输入法让路")
+
+    print("[配色对比度]")
+    import 主题 as _主题
+
+    def _亮(色):
+        色 = 色.lstrip("#")
+        值 = [int(色[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+        值 = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in 值]
+        return 0.2126 * 值[0] + 0.7152 * 值[1] + 0.0722 * 值[2]
+
+    def _比(前, 后):
+        高, 低 = sorted([_亮(前), _亮(后)], reverse=True)
+        return (高 + 0.05) / (低 + 0.05)
+
+    for 名 in ("深色", "浅色"):
+        表 = _主题.取主题(名)
+        底 = 表["编辑器"]
+        for 键 in ("文本", "次要文本", "行号字", "注释"):
+            值 = _比(表[键], 底)
+            检查(值 >= 4.5, "%s %s 对比度 %.2f ≥ 4.5" % (名, 键, 值))
+
     print("[关闭文档]")
     for 文档 in list(窗.文档集):
         文档.已改 = False
