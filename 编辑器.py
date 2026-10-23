@@ -223,6 +223,10 @@ class 编辑器(QPlainTextEdit):
         if not self.已改:
             self.已改 = True
             self.主窗.刷新标签(self)
+            # 标题栏也要跟着显示 ●，否则用户看不出这个文件有未保存改动
+            if self.主窗.当前 is self:
+                self.主窗._刷新标题()
+        self.主窗.更新状态栏()
 
     def paintEvent(self, 事件):
         super().paintEvent(事件)
@@ -317,6 +321,15 @@ class 编辑器(QPlainTextEdit):
                         删.removeSelectedText()
                         return
         super().keyPressEvent(事件)
+
+    def wheelEvent(self, 事件):
+        """Ctrl+滚轮 缩放字号（编辑器通用操作）。"""
+        if 事件.modifiers() & Qt.ControlModifier:
+            差 = 1 if 事件.angleDelta().y() > 0 else -1
+            self.主窗.改字号(差)
+            事件.accept()
+            return
+        super().wheelEvent(事件)
 
     def _自动配对(self, 左, 右):
         """插入一对括号；若选中了文字，则把选区包起来。

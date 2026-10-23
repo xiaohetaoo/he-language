@@ -1218,10 +1218,16 @@ class 主窗(QMainWindow):
         self.activateWindow()
 
 
-def 启动():
+def 启动(参数=None):
     应用 = QApplication.instance() or QApplication(sys.argv)
     应用.setApplicationName("核工坊")
     窗 = 主窗()
+    # 双击 .xht 文件时，系统会把路径作为参数传进来，直接打开它
+    参数 = 参数 if 参数 is not None else sys.argv[1:]
+    for 项 in 参数:
+        if os.path.isfile(项):
+            窗.打开(项)
+            break
     窗.show()
     return 应用.exec()
 

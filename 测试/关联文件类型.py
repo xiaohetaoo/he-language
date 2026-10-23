@@ -23,10 +23,11 @@ import sys
 
 
 def _打开程序():
-    """优先用打包好的 exe（目标机器无需 Python），否则退回 .cmd。"""
-    exe = os.path.join(根目录, "dist", "核工坊.exe")
-    if os.path.exists(exe):
-        return '"%s" "%%1"' % exe, exe
+    """优先用 Qt 版 exe（观感更好），其次 tkinter 版，最后退回 .cmd。"""
+    for 名 in ("核工坊Qt.exe", "核工坊.exe"):
+        exe = os.path.join(根目录, "dist", 名)
+        if os.path.exists(exe):
+            return '"%s" "%%1"' % exe, exe
     cmd = os.path.join(根目录, "核工坊.cmd")
     return '"%s" "%%1"' % cmd, cmd
 
