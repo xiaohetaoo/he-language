@@ -499,13 +499,21 @@ class 编辑器(QPlainTextEdit):
     def 取文本(self):
         return self.toPlainText()
 
-    def 置文本(self, 文本):
+    def 置文本(self, 文本, 标记已改=False):
+        """替换全部文本。
+
+        `标记已改` 默认为 False（用于刚从磁盘加载完文件）；
+        程序内部改写内容时应传 True，否则会误以为文件没变，
+        后续保存/运行就会用磁盘上的旧内容。
+        """
         self._载入中 = True
         self.setPlainText(文本)
         self._载入中 = False
-        self.已改 = False
+        self.已改 = bool(标记已改)
         if hasattr(self, "主窗") and self.主窗 is not None:
             self.主窗.刷新标签(self)
+            if self.已改 and self.主窗.当前 is self:
+                self.主窗._刷新标题()
 
 
 # 需要 QTextDocument 用于查找旗标
