@@ -6,6 +6,7 @@ import sys
 import tempfile
 
 这里 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, 这里)
 exe = os.path.join(这里, "dist", "核工坊Qt.exe")
 
 失败 = []
@@ -43,12 +44,17 @@ print("=== exe 内核功能 ===")
 跑("语法错误", '核说(1 +\n', 期望="语法")
 跑("运行时错误", '核说(1 / 0)\n', 期望="")
 
-# 版本
+# 版本：读 核.py 里的版本号来比，不要写死 —— 每次升版本都要回来改测试
+# 本身就是个坑（0.0.9 打包后就因为这行误报「版本查询失败」）。
+import 核
+
+期望版本 = 核.版本
 结果 = subprocess.run([exe, "--内核", "--版本"], capture_output=True, timeout=60,
                      env=dict(os.environ, PYTHONIOENCODING="utf-8"))
 出 = (结果.stdout + 结果.stderr).decode("utf-8", "replace")
-ok = "0.0.8" in 出
-print("  %-16s %s  %s" % ("版本查询", "OK" if ok else "FAIL", 出.strip()[:80]))
+ok = 期望版本 in 出
+print("  %-16s %s  %s" % ("版本查询（期望 %s）" % 期望版本, "OK" if ok else "FAIL",
+                         出.strip()[:80]))
 if not ok:
     失败.append("版本查询")
 

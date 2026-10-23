@@ -7,8 +7,8 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import 主题
@@ -75,13 +75,11 @@ class 设置对话框(QDialog):
         右布局.setSpacing(12)
 
         self.标题 = QLabel("外观")
-        self.标题.setStyleSheet(
-            "font-size: 17px; font-weight: bold; color: %s;" % self.主窗.主题["文本"]
-        )
+        self.标题.setObjectName("pageTitle")
         右布局.addWidget(self.标题)
 
         self.说明 = QLabel("")
-        self.说明.setStyleSheet("color: %s;" % self.主窗.主题["次要文本"])
+        self.说明.setObjectName("hintText")
         右布局.addWidget(self.说明)
 
         self.栈 = QStackedWidget()
@@ -126,9 +124,7 @@ class 设置对话框(QDialog):
 
     def _分组(self, 文本):
         标 = QLabel(文本)
-        标.setStyleSheet(
-            "font-weight: bold; color: %s; margin-top: 6px;" % self.主窗.主题["文本"]
-        )
+        标.setObjectName("groupTitle")
         return 标
 
     def _页外观(self):
@@ -149,29 +145,39 @@ class 设置对话框(QDialog):
         布局.addLayout(行)
 
         布局.addWidget(self._分组("编辑器字号"))
-        行2 = QHBoxLayout()
-        self.字号框 = 带箭头下拉框()
-        # 必须把「改字号」实际能达到的每个值都列全（那边是 9~22 逐个加减），
-        # 否则当前值不在列表里时 findData 返回 -1、下拉框显示成 9 pt，
-        # 用户一按确定字号就被悄悄改回 9。
-        可选 = list(range(9, 23))
-        当前 = int(self.主窗.字号)
-        if 当前 not in 可选:
-            可选.append(当前)
-            可选.sort()
-        for n in 可选:
-            self.字号框.addItem("%d pt" % n, n)
-        位置 = self.字号框.findData(当前)
-        self.字号框.setCurrentIndex(位置 if 位置 >= 0 else 0)
-        self.字号框.currentIndexChanged.connect(self._换字号)
-        行2.addWidget(self.字号框)
-        _提示 = QLabel("代码区域的字号，行号栏会跟着缩放")
-        _提示.setStyleSheet(
-            "color: %s; font-size: 11px;" % self.主窗.主题["次要文本"]
+        字号行 = QHBoxLayout()
+        字号行.setSpacing(10)
+        # 用滑动条而不是下拉框：
+        #   · 下拉列表要枚举所有值，范围一大列表就长得没法看；
+        #   · 拖动能连续看到效果，比「选中→看变化」直观得多。
+        self.字号条 = QSlider(Qt.Horizontal)
+        self.字号条.setMinimum(主题.字号最小)
+        self.字号条.setMaximum(主题.字号最大)
+        self.字号条.setSingleStep(主题.字号步长)
+        self.字号条.setPageStep(2)
+        self.字号条.setTickPosition(QSlider.TicksBelow)
+        self.字号条.setTickInterval(4)
+        self.字号条.setValue(主题.夹字号(self.主窗.字号))
+        # 拖动时 valueChanged 会连续触发，是想要的（实时预览）；
+        # 但每次都要重建整份样式表，太重 —— 见 _换字号 里的去抖。
+        self.字号条.valueChanged.connect(self._换字号)
+        # 松手立刻落实最后一个值，不等去抖
+        self.字号条.sliderReleased.connect(self._字号松手)
+        字号行.addWidget(self.字号条, 1)
+        # 当前值单独显示，拖动时眼睛不用在刻度上找
+        self.字号标 = QLabel("%d pt" % self.字号条.value())
+        self.字号标.setFixedWidth(52)
+        self.字号标.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.字号标.setObjectName("sliderValue")
+        字号行.addWidget(self.字号标)
+        布局.addLayout(字号行)
+
+        字号范围 = QLabel(
+            "范围 %d–%d pt　·　代码区域的字号，行号栏会跟着缩放"
+            % (主题.字号最小, 主题.字号最大)
         )
-        行2.addWidget(_提示)
-        行2.addStretch(1)
-        布局.addLayout(行2)
+        字号范围.setObjectName("hintText")
+        布局.addWidget(字号范围)
 
         布局.addWidget(self._分组("界面元素"))
         self.勾行号 = QCheckBox("显示行号")
@@ -259,7 +265,7 @@ class 设置对话框(QDialog):
         布局.setSpacing(8)
 
         标 = QLabel("核语言 %s（Qt 版）" % 核.版本)
-        标.setStyleSheet("font-size: 15px; font-weight: bold;")
+        标.setObjectName("aboutTitle")
         布局.addWidget(标)
         布局.addWidget(
             QLabel("用中文写程序 · 源文件后缀 %s" % 核.扩展名)
@@ -291,13 +297,13 @@ class 设置对话框(QDialog):
             "所以按英文去重后的种类数会比这里少。"
         )
         说明.setWordWrap(True)
-        说明.setStyleSheet("color: %s; font-size: 11px;" % self.主窗.主题["次要文本"])
+        说明.setObjectName("hintText")
         布局.addSpacing(4)
         布局.addWidget(说明)
 
         布局.addSpacing(14)
         链 = QLabel("查看最新版本与下载 → github.com/xiaohetaoo/he-language/releases")
-        链.setStyleSheet("color: %s;" % self.主窗.主题["强调"])
+        链.setObjectName("linkLabel")
         链.setCursor(Qt.PointingHandCursor)
         链.mousePressEvent = lambda e: self._打开发布页()
         布局.addWidget(链)
@@ -340,10 +346,42 @@ class 设置对话框(QDialog):
             if 框 is not None and hasattr(框, "设箭头色"):
                 框.设箭头色(色)
 
-    def _换字号(self, _索引):
-        n = self.字号框.currentData()
-        if n:
-            self.主窗.设字号(int(n))
+    def _换字号(self, 值):
+        """拖动滑动条时实时应用。
+
+        拖一次会连续触发很多次 valueChanged，每次都要重建整份样式表
+        （几百条 QSS 规则 + 所有文档重新设字体），开销不小。
+        用 30ms 去抖把连续事件合成一次：拖动过程中最多每 30ms 应用一次，
+        松手后立刻生效。标签是立刻更新的 —— 它只改一个数字，可以忽略。
+        """
+        self.字号标.setText("%d pt" % 值)
+        self._待应用字号 = int(值)
+        任务 = getattr(self, "_字号任务", None)
+        if 任务 is None:
+            from PySide6.QtCore import QTimer
+
+            任务 = QTimer(self)
+            任务.setSingleShot(True)
+            任务.setInterval(30)
+            任务.timeout.connect(self._落实字号)
+            self._字号任务 = 任务
+        任务.start(30)
+
+    def _落实字号(self):
+        值 = getattr(self, "_待应用字号", None)
+        if 值 is not None:
+            self.主窗.设字号(值)
+
+    def _字号松手(self):
+        """松开滑动条：把最后一次待应用的值立刻落实。
+
+        拖动过程中靠 30ms 去抖，最后一个值可能还在定时器里没执行；
+        用户松手时应该马上看到最终效果，不能再等 30ms。
+        """
+        任务 = getattr(self, "_字号任务", None)
+        if 任务 is not None:
+            任务.stop()
+        self._落实字号()
 
     def _换行号(self, _状态):
         self.主窗.设行号(self.勾行号.isChecked())
@@ -385,6 +423,9 @@ class 设置对话框(QDialog):
         以前这里只把 结果 置 True、喊一句「已应用」，既不推给编辑器
         也不写盘 —— 所以用户必须关掉软件重开才看得到效果。
         """
+        # 先把拖动去抖里还没落实的字号补上，否则快速拖完立刻按确定，
+        # 最后一次的值可能还躺在定时器里没生效。
+        self._落实字号()
         self.结果 = True
         self.主窗.应用设置(保存=True)
         self.主窗.状态("设置已应用")
@@ -400,9 +441,23 @@ class 设置对话框(QDialog):
         留在被改过的状态，按「取消」等于没取消。
         """
         主窗 = self.主窗
+        # 停掉字号去抖，否则还原之后定时器又把它改回去
+        任务 = getattr(self, "_字号任务", None)
+        if 任务 is not None:
+            任务.stop()
+        self._待应用字号 = None
         if 主窗.主题名 != self.原始["主题名"]:
             主窗.换主题(self.原始["主题名"])
         主窗.设字号(self.原始["字号"])
+        # 滑动条也要回到原值，不然界面显示的仍是刚拖到的位置
+        条 = getattr(self, "字号条", None)
+        if 条 is not None:
+            条.blockSignals(True)
+            条.setValue(主题.夹字号(self.原始["字号"]))
+            条.blockSignals(False)
+            标 = getattr(self, "字号标", None)
+            if 标 is not None:
+                标.setText("%d pt" % 条.value())
         主窗.设制表宽(self.原始["制表宽"])
         主窗.设缩进线(self.原始["缩进线"])
         主窗.设行号(self.原始["行号"])

@@ -117,6 +117,23 @@
 #: 界面字体
 界面字体 = "Microsoft YaHei UI"
 
+#: 编辑器字号范围与步长 —— **唯一来源**。
+#: 主窗、设置窗口、自检都必须读这里，别再各写一份 min/max：
+#: 以前三处各写各的（9~22 / 9~23 / 8~28），改一处就会出现
+#: 「设置里能调到 22、按 +/- 只能到 22、配置里却存了 26」这种不一致。
+字号最小 = 8
+字号最大 = 40
+字号步长 = 1
+
+
+def 夹字号(字号):
+    """把任意字号夹到允许范围内（并取整）。"""
+    try:
+        n = int(round(float(字号)))
+    except (TypeError, ValueError):
+        return 12
+    return max(字号最小, min(字号最大, n))
+
 
 # ---------------------------------------------------------------------------
 # QSS 模板 —— 所有控件的样式都集中在这里
@@ -395,7 +412,61 @@ QListWidget::item:selected { background: __选中行__; color: #FFFFFF; }
 QListWidget::item:hover:!selected { background: __悬停__; }
 QGroupBox { color: __文本__; border: none; margin-top: 8px; }
 QLabel { background: transparent; }
+
+/* 设置窗口内部用的几个文字角色。
+   以前这些控件的颜色是靠 setStyleSheet(f"color: {主题[文本]}") 行内写死的，
+   换主题时不会更新 —— 从深色切到浅色后，标题会保持深色主题的浅灰，
+   在浅底上几乎看不见（实测「外观 / 配色 / 编辑器字号」全糊成一片）。
+   改走 QSS 之后，换主题重生成样式表就自动跟着变。 */
+#pageTitle { color: __文本__; font-size: 17px; font-weight: bold; background: transparent; }
+#groupTitle { color: __文本__; font-weight: bold; background: transparent; }
+#hintText  { color: __次要文本__; font-size: 11px; background: transparent; }
+#sliderValue { color: __文本__; font-weight: bold; background: transparent; }
+#aboutTitle { color: __文本__; font-size: 15px; font-weight: bold; background: transparent; }
+#linkLabel  { color: __强调__; background: transparent; }
 QTabWidget::pane { border: none; background: __窗口__; }
+
+/* 滑动条（设置里的字号）。
+   Qt 的 QSlider 子控件尺寸规则很别扭：
+     · handle 的高度 = groove 高度 + 2*|margin|，写负 margin 会把
+       手柄拉成竖椭圆（实测 14x22，像颗胶囊而不是圆钮）；
+     · 但 groove 高度太小（4px）时手柄根本没有画圆的空间。
+   解法：把 groove 做到 16px 高（给手柄正方形空间），再用竖直渐变
+   让「可见的轨道」只占中间那 4px —— 上下各 37.5% 都是透明的。 */
+QSlider { min-height: 24px; }
+QSlider::groove:horizontal {
+    height: 16px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0    transparent,
+        stop:0.37 transparent,
+        stop:0.38 __边框__,
+        stop:0.62 __边框__,
+        stop:0.63 transparent,
+        stop:1    transparent);
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0    transparent,
+        stop:0.37 transparent,
+        stop:0.38 __强调__,
+        stop:0.62 __强调__,
+        stop:0.63 transparent,
+        stop:1    transparent);
+}
+QSlider::add-page:horizontal { background: transparent; }
+/* 圆钮：内容 8px + 边框 3px*2 = 14px 见方，半径 7 → 正圆。
+   margin 归零，让高度等于 groove 的 16px 减去自身，不再被撑长。 */
+QSlider::handle:horizontal {
+    background: __强调__;
+    border: 3px solid __编辑器__;
+    width: 8px;
+    height: 8px;
+    margin: 1px 0px;
+    border-radius: 7px;
+}
+QSlider::handle:horizontal:hover { background: __按钮热__; }
+QSlider::handle:horizontal:pressed { background: __按钮热__; }
+QSlider::tick:horizontal { background: transparent; }
 """
 
 

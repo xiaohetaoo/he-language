@@ -71,7 +71,9 @@ class 查找对话框(QDialog):
         行.addWidget(self.勾区分)
         行.addStretch(1)
         self.计数 = QLabel("")
-        self.计数.setStyleSheet("color: %s;" % self.主窗.主题["次要文本"])
+        # 用 objectName 交给 QSS，而不是行内写死颜色：
+        # 行内颜色在换主题时不会更新（浅底上会变成看不清的浅灰）。
+        self.计数.setObjectName("hintText")
         行.addWidget(self.计数)
         关 = QPushButton("关闭")
         关.setAutoDefault(False)
