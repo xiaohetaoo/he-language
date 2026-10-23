@@ -442,6 +442,36 @@ def 主():
     应用.processEvents()
     检查(_窗.字号 == 16 and _编S.字号 == 16, "改字号当场生效")
 
+    print("[字号真的改变显示尺寸]")
+    # 用户报「设置里调字号没有变化」。根因：QSS 里给 QWidget 写死了
+    # font-size:13px，其优先级高于 setFont()，于是编辑器设的 QFont
+    # 点数被完全覆盖 —— QFont.pointSize() 恒为 -1、fontMetrics 恒为 16。
+    # 这里量「实际渲染出来的行高」，必须随字号变大变小。
+    # 先保存，测完恢复，免得影响后续断言。
+    _原字号 = _窗.字号
+    _窗.设字号(10)
+    应用.processEvents()
+    _小 = _编S.fontMetrics().height()
+    _小栏 = _编S.行号.宽度
+    _窗.设字号(20)
+    for _ in range(6):
+        应用.processEvents()
+    _大 = _编S.fontMetrics().height()
+    _大栏 = _编S.行号.宽度
+    检查(_大 > _小, "字号 10→20 行高变大（%d → %d）" % (_小, _大))
+    # 行号栏也要跟着变，否则正文字号变了、行号数字不变
+    检查(_编S.行号.fontMetrics().height() == _大,
+         "行号栏字号跟随正文（%d vs %d）" % (_编S.行号.fontMetrics().height(), _大))
+    # 行号栏宽度必须够放最大的行号，不能把数字裁掉
+    _需 = _编S.行号.fontMetrics().horizontalAdvance("888")
+    检查(_大栏 - 10 >= _需,
+         "行号栏宽 %d 放得下三位数字 %d" % (_大栏, _需))
+    检查(_大栏 > _小栏,
+         "行号栏随字号加宽（%d → %d）" % (_小栏, _大栏))
+    _窗.设字号(_原字号)
+    for _ in range(6):
+        应用.processEvents()
+
     # 「应用」必须写盘（以前只喊一句「已应用」，什么都不存）
     _框.应用()
     应用.processEvents()

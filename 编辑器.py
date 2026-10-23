@@ -103,14 +103,27 @@ class 行号区(QWidget):
     def __init__(self, 编辑器):
         super().__init__(编辑器)
         self.编辑器 = 编辑器
+        # 给 QSS 一个钩子：行号栏是 QWidget 子类，会被全局 QWidget 的
+        # font-size 覆盖，必须靠 #gutter 规则才能跟正文字号一致。
+        self.setObjectName("gutter")
         # 宽度按「最大行号位数」自适应，至少 3 位（58px）。
         # 太窄时两位数就挤到边缘，正文看起来像被行号压住了。
         self.宽度 = 58
         self.setFixedWidth(self.宽度)
 
     def 按行号调整宽度(self, 总行数):
+        """按「最大行号位数」和当前字体的实际字宽算宽度。
+
+        以前是 `16 + 位数*9`，9 这个系数只在小字号下凑巧够用：
+        字号调到 20/22 时，三位数字实测要 35~39px，而宽度仍是 43，
+        减掉右边距 10 就只剩 33 —— 数字被裁掉一部分，
+        看起来就像行号「缺了一半」。
+        """
         位数 = max(3, len(str(max(1, 总行数))))
-        新宽 = 16 + 位数 * 9
+        fm = self.fontMetrics()
+        数字宽 = fm.horizontalAdvance("8" * 位数)
+        # 10 = 右边距（paintEvent 里 drawText 用的是 宽度-10）
+        新宽 = max(28, 数字宽 + 10 + 8)
         if 新宽 != self.宽度:
             self.宽度 = 新宽
             self.setFixedWidth(新宽)
@@ -231,12 +244,23 @@ class 编辑器(QPlainTextEdit):
         字体 = QFont(挑等宽字体(), self.字号)
         字体.setStyleHint(QFont.Monospace)
         self.setFont(字体)
-        self.setTabStopDistance(
-            QFontMetrics(字体).horizontalAdvance(" ") * self.制表宽
-        )
         if hasattr(self, "行号"):
             self.行号.setFont(字体)
+            # 注意：QSS 里 QPlainTextEdit/#gutter 也写了 font-size，
+            # 其优先级高于 setFont()，所以 setFont 之后真正的字体
+            # 由样式表决定。制表宽度必须按「实际生效的字体」算，
+            # 否则字号一大，tab 位置就和显示对不上。
+            实际 = self.fontMetrics()
+            self.setTabStopDistance(
+                实际.horizontalAdvance(" ") * self.制表宽
+            )
+            # 字号变了，行号栏需要的宽度也变了，必须重算
+            self._更新行号宽()
             self.行号.update()
+        else:
+            self.setTabStopDistance(
+                QFontMetrics(字体).horizontalAdvance(" ") * self.制表宽
+            )
 
     def 换主题(self):
         self.高亮.重建()

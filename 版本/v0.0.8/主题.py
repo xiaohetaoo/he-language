@@ -130,6 +130,22 @@ QWidget {
     font-family: "__界面字体__";
     font-size: 13px;
 }
+/* 编辑器字号来自设置里的「字号」。
+   QSS 的 font-size 优先级高于 setFont()，原来这里写死 13px，
+   于是 编辑器.设置字体() 里设的 QPointSize 被完全覆盖 ——
+   用户改字号什么都没发生（实测 QFont.pointSize() 恒为 -1、
+   fontMetrics 高度恒为 16）。用 __字号__ 占位符把设置接进来。 */
+QPlainTextEdit, QTextEdit {
+    font-family: "__等宽字体__";
+    font-size: __字号__px;
+}
+/* 行号栏自己也是 QWidget 子类，会被上面 QWidget 的 font-size:13px 覆盖，
+   导致正文字号变了、行号数字却不变（看起来像行号突然变小）。
+   这里显式给它同样的字号与等宽字体。 */
+#gutter {
+    font-family: "__等宽字体__";
+    font-size: __字号__px;
+}
 QMainWindow { background: __窗口__; }
 QToolTip {
     background: __浮层__; color: __文本__;
@@ -383,16 +399,21 @@ QTabWidget::pane { border: none; background: __窗口__; }
 """
 
 
-def 生成样式(主题=None, 字号=12):
+def 生成样式(主题=None, 字号=12, 等宽=None):
     """把色表套进 QSS 模板，返回可直接 setStyleSheet 的字符串。
 
     QSS 里全是 CSS 的 `{}`，直接用 str.format 会冲突，
     所以模板里用的是 `__键名__` 占位符，这里用 replace 填充。
+
+    `字号` 同时决定编辑器字号（QSS 的 font-size 优先级高于 setFont()，
+    所以必须写进 QSS 才真的生效）。`等宽` 不传就用候选表第一项，
+    真正可用性由调用方（编辑器.挑等宽字体）保证。
     """
     主题 = 主题 or 深色
     数据 = dict(主题)
     数据["界面字体"] = 界面字体
-    数据["字号"] = str(字号)
+    数据["字号"] = str(int(字号))
+    数据["等宽字体"] = 等宽 or 等宽候选[0]
     文本 = _QSS
     # 保险：模板里若混进了 `{中文名}` 这种单花括号写法（CSS 的块花括号
     # 里永远是选择器和声明，绝不会只有纯中文），先统一成 `__中文名__`。
@@ -423,10 +444,10 @@ def 取主题(名, 备用=None):
     return 主题集.get(名) or 备用 or 深色
 
 
-def 换主题(应用窗口, 主题, 字号=12):
+def 换主题(应用窗口, 主题, 字号=12, 等宽=None):
     """给整个应用套上主题。一行搞定 —— 这就是维护性的提升。
 
     注意：务必传 QApplication 实例而不是主窗口，否则对话框等子窗口
     拿不到样式。若实际传入的是 QWidget，也能工作（样式会向下继承）。
     """
-    应用窗口.setStyleSheet(生成样式(主题, 字号))
+    应用窗口.setStyleSheet(生成样式(主题, 字号, 等宽))

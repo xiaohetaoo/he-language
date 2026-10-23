@@ -472,7 +472,7 @@ class 主窗(QMainWindow):
 
         self._建界面()
         self._绑快捷键()
-        主题.换主题(self, self.主题, self.字号)
+        self._套样式()
         self._应用窗口外观()
         self._刷新图标()
 
@@ -1446,22 +1446,48 @@ class 主窗(QMainWindow):
 
     def 改字号(self, 差):
         self.字号 = max(9, min(22, self.字号 + 差))
+        self._应用字号()
+
+    def 设字号(self, 字号):
+        """直接设定字号（设置窗口的下拉框用，避免「差多少」算错）。"""
+        字号 = max(9, min(22, int(字号)))
+        if 字号 != self.字号:
+            self.字号 = 字号
+        self._应用字号()
+
+    def _应用字号(self):
+        """把字号真正应用到界面上。
+
+        QSS 的 `font-size` **优先级高于 setFont()**：QSS 里给
+        QPlainTextEdit 写死了 13px 时，编辑器里设的 QFont 点数会被完全
+        覆盖 —— 实测 QFont.pointSize() 恒为 -1、fontMetrics 高度恒为 16，
+        用户调字号看不出任何变化。
+        所以字号必须重生成整份样式表（生成样式里用 __字号__ 占位符），
+        再让编辑器同步自己的字体对象（行号栏、制表宽度都依赖它）。
+        """
+        self._套样式()
         for d in self.文档集:
             d.设置字体(self.字号)
         self.状态("字号 %d" % self.字号)
         self.存配置()
 
-    def 设字号(self, 字号):
-        """直接设定字号（设置窗口的下拉框用，避免「差多少」算错）。"""
-        字号 = max(9, min(22, int(字号)))
-        if 字号 == self.字号:
-            return
-        self.改字号(字号 - self.字号)
+    def 等宽字体名(self):
+        """编辑器实际会用的等宽字体（要写进 QSS，见 _应用字号 的说明）。"""
+        try:
+            from 编辑器 import 挑等宽字体
+
+            return 挑等宽字体()
+        except Exception:  # noqa: BLE001
+            return 主题.等宽候选[-1]
+
+    def _套样式(self):
+        """按当前主题/字号重生成整份样式表。"""
+        主题.换主题(self, self.主题, self.字号, self.等宽字体名())
 
     def 换主题(self, 名):
         self.主题 = 主题.取主题(名, self.主题)
         self.主题名 = self.主题["名"]
-        主题.换主题(self, self.主题, self.字号)
+        self._套样式()
         self._应用窗口外观()
         self._刷新图标()
         for d in self.文档集:

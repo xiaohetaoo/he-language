@@ -123,7 +123,29 @@ def 主():
             "        '标签数': 窗.标签栏.count(),\n"
             "        '图标存在': os.path.exists(os.path.join(基, '素材', '核图标.ico')),\n"
             "        '对照表行数': len(窗.对照.toPlainText().splitlines()),\n"
+            "        '启动字号': 窗.字号,\n"
             "    }\n"
+            "    # 字号必须真的改变渲染尺寸（QSS 优先级坑）：\n"
+            "    # 打包后如果 QSS 里的 font-size 占位符没被替换，\n"
+            "    # 行高会恒等于 16，用户改字号看不到任何变化。\n"
+            "    try:\n"
+            "        _编 = 窗.当前\n"
+            "        窗.设字号(10)\n"
+            "        应用.processEvents()\n"
+            "        _小 = _编.fontMetrics().height()\n"
+            "        窗.设字号(20)\n"
+            "        应用.processEvents()\n"
+            "        _大 = _编.fontMetrics().height()\n"
+            "        报告['字号行高_10pt'] = _小\n"
+            "        报告['字号行高_20pt'] = _大\n"
+            "        报告['字号真的生效'] = bool(_大 > _小)\n"
+            "        报告['行号跟随字号'] = bool(\n"
+            "            _编.行号.fontMetrics().height() == _大)\n"
+            "        窗.设字号(12)\n"
+            "        应用.processEvents()\n"
+            "        报告['恢复后字号'] = 窗.字号\n"
+            "    except Exception as e:\n"
+            "        报告['字号检查失败'] = str(e)\n"
             "    try:\n"
             "        窗.grab().save(os.path.join(输出目录, '自检_Qt.png'))\n"
             "    except Exception as e:\n"
@@ -242,6 +264,15 @@ def 校验产物(产物, 根目录):
         问题.append("竖条图标没画出来（pixmap 为空）")
     if 报告.get("顶行有设置"):
         问题.append("顶行重复出现了设置入口")
+    # 字号必须真的生效：QSS 里 font-size 的优先级高于 setFont()，
+    # 打包后若占位符没被替换成具体数值，改字号看不出任何变化。
+    if "字号真的生效" in 报告 and not 报告["字号真的生效"]:
+        问题.append(
+            "字号不生效（10pt 行高 %s，20pt 行高 %s）"
+            % (报告.get("字号行高_10pt"), 报告.get("字号行高_20pt"))
+        )
+    if "行号跟随字号" in 报告 and not 报告["行号跟随字号"]:
+        问题.append("行号栏字号没跟随正文")
 
     print("自检结果：")
     for 键 in (
@@ -254,6 +285,10 @@ def 校验产物(产物, 根目录):
         "标签数",
         "对照表行数",
         "图标存在",
+        "启动字号",
+        "字号真的生效",
+        "行号跟随字号",
+        "恢复后字号",
     ):
         print("  %-12s %s" % (键, 报告.get(键)))
 

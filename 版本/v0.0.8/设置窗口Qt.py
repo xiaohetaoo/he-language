@@ -43,7 +43,9 @@ class 设置对话框(QDialog):
         self.setModal(True)
         self.resize(720, 560)
         # 独立窗口不会自动继承父窗口样式，必须显式套一份
-        self.setStyleSheet(主题.生成样式(主窗.主题, 主窗.字号))
+        self.setStyleSheet(
+            主题.生成样式(主窗.主题, 主窗.字号, 主窗.等宽字体名())
+        )
         if os.path.exists(os.path.join(这里, "素材", "核图标.ico")):
             from PySide6.QtGui import QIcon
 
@@ -146,7 +148,7 @@ class 设置对话框(QDialog):
         行.addStretch(1)
         布局.addLayout(行)
 
-        布局.addWidget(self._分组("字号"))
+        布局.addWidget(self._分组("编辑器字号"))
         行2 = QHBoxLayout()
         self.字号框 = 带箭头下拉框()
         # 必须把「改字号」实际能达到的每个值都列全（那边是 9~22 逐个加减），
@@ -163,6 +165,11 @@ class 设置对话框(QDialog):
         self.字号框.setCurrentIndex(位置 if 位置 >= 0 else 0)
         self.字号框.currentIndexChanged.connect(self._换字号)
         行2.addWidget(self.字号框)
+        _提示 = QLabel("代码区域的字号，行号栏会跟着缩放")
+        _提示.setStyleSheet(
+            "color: %s; font-size: 11px;" % self.主窗.主题["次要文本"]
+        )
+        行2.addWidget(_提示)
         行2.addStretch(1)
         布局.addLayout(行2)
 
@@ -318,7 +325,11 @@ class 设置对话框(QDialog):
     def _换主题(self, 名):
         self.主窗.换主题(名)
         # 对话框是独立窗口，不会自动跟主窗换皮，得自己再套一次
-        self.setStyleSheet(主题.生成样式(self.主窗.主题, self.主窗.字号))
+        self.setStyleSheet(
+            主题.生成样式(
+                self.主窗.主题, self.主窗.字号, self.主窗.等宽字体名()
+            )
+        )
         self._同步箭头色()
 
     def _同步箭头色(self):
