@@ -136,11 +136,17 @@ QToolTip {
     border: 1px solid __边框__; border-radius: 6px; padding: 5px 8px;
 }
 
-/* 外框（圆角无边框窗口） */
+/* 外框（圆角无边框窗口）。
+   最大化时必须把圆角去掉：#rootFrame 的四角会被切掉一小块，
+   屏幕四角因此露出桌面/阴影，看起来就像「全屏没占满」。
+   主窗._应用窗口外观() 通过设置 maximized 属性切换下面这条规则。 */
 #rootFrame {
     background: __窗口__;
     border: 1px solid __边框__;
     border-radius: 12px;
+}
+#rootFrame[maximized="true"] {
+    border-radius: 0px;
 }
 
 /* 标题栏 */
@@ -160,14 +166,17 @@ QToolTip {
 }
 #品牌字:hover { background: __悬停__; }
 
-/* 窗口按钮 */
-#winBtn {
+/* 窗口按钮。
+   objectName 必须和代码里一致：窗口钮 / 关闭钮。
+   以前这里写的是 #winBtn / #closeBtn，和代码对不上，于是三个窗口按钮
+   一条样式都没套上 —— 没有悬停反馈、关闭钮也不会变红。 */
+#窗口钮 {
     color: __次要文本__; font-size: 13px;
     background: transparent; padding: 0px;
 }
-#winBtn:hover { background: __悬停__; color: __文本__; }
-#closeBtn { color: __次要文本__; background: transparent; }
-#closeBtn:hover { background: __关闭红__; color: #FFFFFF; }
+#窗口钮:hover { background: __悬停__; color: __文本__; }
+#关闭钮 { color: __次要文本__; background: transparent; }
+#关闭钮:hover { background: __关闭红__; color: #FFFFFF; }
 
 /* 搜索框 */
 #searchBox {
@@ -322,6 +331,15 @@ QPushButton {
     border: none; border-radius: 6px; padding: 7px 18px; font-size: 13px;
 }
 QPushButton:hover { background: __按下__; }
+/* 主按钮（确定 / 运行 等）。
+   用自定义属性 primary="true" 而不是 :default —— Qt 会在对话框显示时
+   把「默认按钮」偷偷转给焦点链里第一个 autoDefault 的按钮，
+   :default 因此会飘到不相关的按钮上（实测「更改…」变成蓝色，
+   按回车还会弹文件选择框而不是确认）。属性由我们自己控制，不会被抢。 */
+QPushButton[primary="true"] {
+    background: __按钮底__; color: #FFFFFF;
+}
+QPushButton[primary="true"]:hover { background: __按钮热__; }
 QPushButton:default { background: __按钮底__; color: #FFFFFF; }
 QPushButton:default:hover { background: __按钮热__; }
 QCheckBox { color: __文本__; spacing: 8px; background: transparent; }
@@ -334,6 +352,16 @@ QComboBox {
     background: __编辑器__; color: __文本__;
     border: 1px solid __边框__; border-radius: 6px; padding: 5px 10px;
 }
+/* 下拉箭头区。不写这两条的话，Qt 会用 Fusion 样式的默认值：
+   箭头那边带一块更亮的底 + 一条竖分隔线，在深色主题上很扎眼。 */
+QComboBox::drop-down {
+    subcontrol-origin: padding; subcontrol-position: center right;
+    width: 20px; border: none; background: transparent;
+}
+/* 箭头由程序自绘（见 核工坊Qt.带箭头下拉框）。
+   Qt 的 QSS 不支持 CSS 的「边框拼三角形」写法，写了会渲染成一个实心方块；
+   而图片在单文件打包后相对路径容易失效。自绘最稳。 */
+QComboBox::down-arrow { width: 0px; height: 0px; image: none; }
 QComboBox QAbstractItemView {
     background: __浮层__; color: __文本__;
     border: 1px solid __边框__; selection-background-color: __强调__;

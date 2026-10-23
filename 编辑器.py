@@ -43,6 +43,11 @@ class 高亮器(QSyntaxHighlighter):
     def __init__(self, 文档, 主窗):
         super().__init__(文档)
         self.主窗 = 主窗
+        # 总开关：设置里勾掉「输入时自动语法高亮」就置 False。
+        # 只断开重建不够 —— 规则已挂上就会一直染色，必须让 highlightBlock
+        # 直接返回，再 rehighlight 一次把颜色洗掉。
+        self.开 = bool(getattr(主窗, "自动高亮", True))
+        self.规则 = []
         self.重建()
 
     def 重建(self):
@@ -82,6 +87,8 @@ class 高亮器(QSyntaxHighlighter):
         ]
 
     def highlightBlock(self, 文本):
+        if not self.开:
+            return
         for 模式, 格式 in self.规则:
             for m in re.finditer(模式, 文本):
                 self.setFormat(m.start(), m.end() - m.start(), 格式)
@@ -118,39 +125,45 @@ class 行号区(QWidget):
         绘 = QPainter(self)
         绘.fillRect(self.rect(), QColor(色["行号底"]))
         绘.setFont(self.编辑器.font())
-        绘.setPen(QPen(QColor(色["行号字"])))
 
         编辑器 = self.编辑器
         块 = 编辑器.firstVisibleBlock()
         号 = 块.blockNumber() + 1
-        # 关键：blockBoundingGeometry 的 y 是相对**视口**的，而行号区自身
-        # 有一个向下的偏移（contentsRect 的 padding-top）。不减掉这个偏移，
-        # 行号会整体偏下、和正文行对不齐 —— 上一版正是这里没扣，
-        # 导致第 2 行起正文压进了行号区，看起来「行首被吞了」。
-        自身偏移 = self.y()
+        # 坐标换算（这里错过两次，两次都表现为「行标是歪的」）：
+        #   blockBoundingGeometry 给的是**内容坐标**；加 contentOffset() 后
+        #   得到的是**视口坐标**，而不是行号栏自己的坐标。
+        #   行号栏和视口同属编辑器，但左上角并不重合：视口被 setViewportMargins
+        #   推到行号栏右边，视口上方还有样式表的 padding-top。
+        #   所以必须补上「视口 y - 行号栏 y」这个差。
+        #   上一版减的是 self.y()——行号栏的 y 恰好等于它自己的内边距（6px），
+        #   相当于把行号整体上移 6px，用户看到的就是行标歪、和正文对不齐。
+        偏移 = 编辑器.viewport().y() - self.y()
         顶 = (
             int(
                 编辑器.blockBoundingGeometry(块)
                 .translated(编辑器.contentOffset())
                 .top()
             )
-            - 自身偏移
+            + 偏移
         )
-        行高 = 编辑器.fontMetrics().height()
 
         while 块.isValid() and 顶 <= 事件.rect().bottom():
-            底 = 顶 + int(编辑器.blockBoundingRect(块).height())
-            if 块.isVisible() and 底 >= 事件.rect().top():
+            高 = int(编辑器.blockBoundingRect(块).height())
+            if 块.isVisible() and 顶 + 高 >= 事件.rect().top():
+                # 当前行的行号用正文色，其余用行号灰（与 PyCharm 一致）；
+                # 眼睛跟着光标走时能立刻找到「我在第几行」。
                 if 块.blockNumber() == 编辑器.当前行号():
                     绘.setPen(QPen(QColor(色["文本"])))
                 else:
                     绘.setPen(QPen(QColor(色["行号字"])))
+                # 矩形高度用这一块的实际高度，垂直居中交给 AlignVCenter。
+                # 换字体（Cascadia/Consolas 行高不同）也不会错位。
                 绘.drawText(
-                    0, 顶, self.宽度 - 10, 行高,
+                    0, 顶, self.宽度 - 10, 高,
                     Qt.AlignRight | Qt.AlignVCenter, str(号),
                 )
             块 = 块.next()
-            顶 = 底
+            顶 += 高
             号 += 1
 
 
@@ -169,7 +182,9 @@ class 编辑器(QPlainTextEdit):
         self.主窗 = 主窗
         self.文件路径 = None
         self.已改 = False
-        self.制表宽 = 4
+        # 制表宽从主窗读：设置里改缩进要作用于**已打开**的文档，
+        # 以前写死 4，只有新建的文档才拿到新值。
+        self.制表宽 = int(getattr(主窗, "制表宽", 4))
         # 输入法组字状态（由 inputMethodEvent 维护）
         self._组字中 = False
 
@@ -197,6 +212,7 @@ class 编辑器(QPlainTextEdit):
 
         # 尊重主窗口的「显示行号」开关
         self._行号隐藏 = not getattr(主窗, "显示行号", True)
+        self._缩进线开 = bool(getattr(主窗, "显示缩进线", True))
         if self._行号隐藏:
             self.行号.setVisible(False)
         self._更新行号宽()
@@ -229,6 +245,53 @@ class 编辑器(QPlainTextEdit):
         # 应用样式表会重置 viewportMargins，必须重设，否则文字会贴到最左边
         self.重设行号边距()
         self._当前行变化()
+
+    def 应用设置(self):
+        """把主窗上的所有界面设置一次性同步到这个编辑器。
+
+        设置窗口每改一项就调它 —— 这样「行号/缩进线/缩进宽/字号/高亮」
+        全都当场生效，不用关掉软件重开。
+        """
+        主窗 = self.主窗
+        self.设置字体(getattr(主窗, "字号", None))
+        self.制表宽 = max(1, int(getattr(主窗, "制表宽", self.制表宽)))
+        self.setTabStopDistance(
+            QFontMetrics(self.font()).horizontalAdvance(" ") * self.制表宽
+        )
+        self.设行号(getattr(主窗, "显示行号", True))
+        self.设自动高亮(getattr(主窗, "自动高亮", True))
+        self._缩进线开 = bool(getattr(主窗, "显示缩进线", True))
+        self.update()
+
+    # —— 设置项（改完立刻生效，不用重启）——
+
+    def 设行号(self, 显示):
+        """切换行号栏。设置窗口勾一下就调它，不用重开程序。"""
+        self._行号隐藏 = not 显示
+        self.行号.setVisible(bool(显示))
+        self._更新行号宽()
+        self.重设行号边距()
+
+    def 设制表宽(self, 宽):
+        self.制表宽 = max(1, int(宽))
+        self.设置字体(self.字号)
+        self._当前行变化()
+
+    def 设缩进线(self, 显示):
+        """切换缩进参考线。重绘即可 —— 是否画线由 _缩进线开 决定。"""
+        self._缩进线开 = bool(显示)
+        self.viewport().update()
+
+    def 设自动高亮(self, 开):
+        """开关语法高亮。
+
+        不能只是「以后不再重建规则」——QSyntaxHighlighter 一旦挂上就一直
+        生效，用户勾掉「输入时自动语法高亮」后文字依然彩色，看起来像
+        设置没生效。这里让高亮器自己在 highlightBlock 里直接返回，
+        再 rehighlight 一次把已染上的颜色洗掉。
+        """
+        self.高亮.开 = bool(开)
+        self.高亮.rehighlight()
 
     # —— 行号 ——
 
@@ -324,14 +387,22 @@ class 编辑器(QPlainTextEdit):
 
     def paintEvent(self, 事件):
         super().paintEvent(事件)
-        if self.主窗.显示缩进线:
+        # 用本地缓存，不直接读主窗：设置对话框里切线时主窗可能还没同步，
+        # 而且每次重绘都读一次属性、勾选框关掉后要等下一帧才生效。
+        if getattr(self, "_缩进线开", getattr(self.主窗, "显示缩进线", True)):
             self._画缩进线()
 
     def _画缩进线(self):
         """按行画缩进参考线。
 
-        PyCharm 的做法是：只在这一行**有缩进**时，于对应缩进层级画一小段竖线；
-        空行、无缩进的行都不画。以前是整条通顶竖线，空区域也画满，很难看。
+        PyCharm 的做法：只在这一行**有缩进**时，于对应缩进层级画一小段竖线；
+        空行、无缩进的行都不画。
+
+        只画「外层」层级，不画这一行自己那一级：第 8 行缩进 4 个空格
+        （1 级），线画在 x=16，而正文从 x=19 开始 —— 两者只差 3px，
+        看起来就像「数字们」前面多了一个竖线字符（用户报过像多出个符号）。
+        改成 range(1, 级) 之后，1 级缩进的行不再画线，2 级才在 1 级处画一条，
+        和 PyCharm / VS Code 一致。
         """
         色 = self.主窗.主题
         绘 = QPainter(self.viewport())
@@ -341,24 +412,22 @@ class 编辑器(QPlainTextEdit):
         if 宽 <= 0:
             return
         偏移 = int(self.contentOffset().x())
-        可见顶 = 0
         可见底 = self.viewport().height()
 
         块 = self.firstVisibleBlock()
-        视口偏移 = self.contentOffset().y()
         while 块.isValid():
             矩形 = self.blockBoundingGeometry(块).translated(self.contentOffset())
             顶 = int(矩形.top())
             if 顶 > 可见底:
                 break
             高 = int(矩形.height())
-            if 顶 + 高 >= 可见顶:
+            if 顶 + 高 >= 0:
                 文 = 块.text()
                 if 文.strip():
-                    # 这行有几级缩进，就画几段
+                    # 这行有几级缩进，就在它**外面**的层级画线
                     前导 = len(文) - len(文.lstrip(" \t"))
                     级 = 前导 // self.制表宽
-                    for i in range(1, 级 + 1):
+                    for i in range(1, 级):
                         x = 偏移 + 宽 * i
                         if x >= self.viewport().width():
                             break

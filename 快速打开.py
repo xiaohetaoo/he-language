@@ -96,5 +96,8 @@ class 快速打开(QDialog):
         for 相对路径, 全 in self.候选:
             if 相对路径 == 相对:
                 self.主窗.打开(全)
-                self.destroy()
+                # close() 让 exec() 正常返回，再交给事件循环回收。
+                # 直接 destroy() 在模态循环里可能卡住。
+                self.close()
+                self.deleteLater()
                 return

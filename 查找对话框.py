@@ -57,6 +57,9 @@ class 查找对话框(QDialog):
             ("全部替换", self.全部替换),
         ):
             钮 = QPushButton(文本)
+            # 不设 autoDefault：否则对话框显示时 Qt 会把「默认按钮」
+            # 转给其中一个，回车键就去执行它，而不是用户以为的那个动作。
+            钮.setAutoDefault(False)
             钮.clicked.connect(槽)
             钮列.addWidget(钮)
         网.addLayout(钮列, 0, 2, 2, 1)
@@ -71,6 +74,7 @@ class 查找对话框(QDialog):
         self.计数.setStyleSheet("color: %s;" % self.主窗.主题["次要文本"])
         行.addWidget(self.计数)
         关 = QPushButton("关闭")
+        关.setAutoDefault(False)
         关.clicked.connect(self.close)
         行.addWidget(关)
         布局.addLayout(行)
@@ -141,6 +145,11 @@ class 跳转对话框(QDialog):
         self.框.returnPressed.connect(self.跳)
         布局.addWidget(self.框, 1)
         钮 = QPushButton("跳转")
+        # 这是本对话框唯一的主动作，明确标成主按钮；
+        # autoDefault 关掉，免得被 Qt 换成别的按钮抢走回车。
+        钮.setAutoDefault(False)
+        钮.setDefault(True)
+        钮.setProperty("primary", "true")
         钮.clicked.connect(self.跳)
         布局.addWidget(钮)
 
@@ -155,4 +164,7 @@ class 跳转对话框(QDialog):
         except ValueError:
             return
         if self.编辑器 is not None and self.编辑器.跳到行(行):
-            self.destroy()
+            # close() 结束模态循环；deleteLater() 交给事件循环回收。
+            # 直接 destroy() 在 exec() 里可能让循环拿不到返回值而卡住。
+            self.close()
+            self.deleteLater()

@@ -23,7 +23,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.7"
+版本 = "0.0.8"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -1137,6 +1137,7 @@ def 运行文件(路径, 参数=None, 报告路径=None):
         print("找不到文件：%s" % 路径, file=sys.stderr)
         return 2
     准备输出()
+    准备输入()
     源码 = 读源码(路径)
     报告 = 未定义报告(报告路径 or 默认报告路径(路径))
     try:
@@ -1289,6 +1290,31 @@ def 准备输出():
             pass
 
 
+def 准备输入():
+    """把标准输入也改成 UTF-8 读取，否则中文输入会变成乱码。
+
+    问题只在打包后的 exe 上出现：源码运行时 stdin 是 utf-8，
+    而 PyInstaller 打出来的 exe 里 stdin 的编码是 **gbk**（跟随系统代码页），
+    于是 `说核()` 读到的「小明」被按 GBK 解码成「灏忔槑」。
+    只修输出不修输入，用户就会觉得「在核工坊里输入中文是乱码」。
+
+    注意：控制台里（isatty）如果改编码，可能与 Windows 控制台实际代码页
+    不一致反而更糟，所以只对「非控制台」（管道/重定向，也就是 GUI 运行时
+    的样子）改；控制台里保持系统默认。
+    """
+    流 = getattr(sys, "stdin", None)
+    if 流 is None:
+        return
+    try:
+        if 流.isatty():
+            return
+        编码 = (getattr(流, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if 编码 != "utf8":
+            流.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def 命令行(argv):
     if not argv:
         return 交互模式()
@@ -1362,6 +1388,7 @@ def 命令行(argv):
 
 def 主入口():
     准备输出()
+    准备输入()
     return 命令行(sys.argv[1:])
 
 

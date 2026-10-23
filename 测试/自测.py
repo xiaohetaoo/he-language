@@ -257,6 +257,35 @@ class 运行测试(unittest.TestCase):
         self.assertEqual(码, 0)
         self.assertIn("全角也能跑", 输出)
 
+    def test_管道输入不乱码(self):
+        """通过管道输入中文，程序必须原样读到。
+
+        打包成 exe 后 stdin 的编码是 gbk（跟随系统代码页），
+        以前只有 运行文件() 调 准备输出()、没调 准备输入()，
+        用户在核工坊里输入「小明」会变成「灏忔槑」。
+        """
+        码, 输出, _ = self.运行('名 = 说核()\n核说(核"你好，{名}")\n', 输入="小明\n")
+        self.assertEqual(码, 0)
+        self.assertIn("你好，小明", 输出)
+
+    def test_输出是UTF8字节(self):
+        """管道输出必须是 UTF-8 字节，不能是系统编码（gbk）。
+
+        只在 exe 上暴露：打包入口直接调 命令行() 会绕过 准备输出()，
+        输出的「核语言」是 GBK 字节 bacb d3ef，被当 UTF-8 读就是乱码。
+        """
+        路径 = os.path.join(self.目录, "编.xht")
+        with open(路径, "w", encoding="utf-8") as f:
+            f.write('核说("核语言")\n')
+        结果 = subprocess.run(
+            [解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录,
+            env=dict(os.environ, PYTHONIOENCODING="", PYTHONUTF8="0"),
+        )
+        输出 = 结果.stdout
+        # 「核语言」的 UTF-8 字节是 e6a0 b8 e8af ad e8a8 80
+        self.assertIn("核语言".encode("utf-8"), 输出,
+                      "输出不是 UTF-8：%r" % 输出[:60])
+
 
 class 示例测试(unittest.TestCase):
     """例子目录下的程序都要能跑通。"""

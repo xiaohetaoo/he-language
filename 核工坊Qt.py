@@ -20,9 +20,9 @@ import time
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
-    QMessageBox, QPlainTextEdit, QSplitter, QTabBar, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QSplitter, QTabBar,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 import 主题
@@ -64,6 +64,45 @@ class 窗口钮(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setFixedSize(46, 32)
         self.setCursor(Qt.PointingHandCursor)
+
+
+class 带箭头下拉框(QComboBox):
+    """下拉框：自带画出来的小三角箭头。
+
+    为什么不用 QSS 的 `::down-arrow`：
+      · QSS 不支持 CSS 里「用透明边框拼三角形」那套写法，写了会渲染成
+        一个实心方块（实测是一个 8x8 的灰块，很难看）；
+      · 用图片的话，单文件打包后 QSS 里的相对路径会失效。
+    所以箭头在这里自己画，颜色跟主题走，深/浅色都能看清。
+    """
+
+    def __init__(self, 父=None):
+        super().__init__(父)
+        self.箭头色 = "#B2B6BE"
+
+    def 设箭头色(self, 色):
+        self.箭头色 = 色
+        self.update()
+
+    def paintEvent(self, 事件):
+        super().paintEvent(事件)
+        from PySide6.QtCore import QPointF, Qt as _Qt
+        from PySide6.QtGui import QBrush, QColor, QPainter, QPolygonF
+
+        绘 = QPainter(self)
+        绘.setRenderHint(QPainter.Antialiasing, True)
+        绘.setPen(_Qt.NoPen)
+        绘.setBrush(QBrush(QColor(self.箭头色)))
+        # 贴在右侧，垂直居中，尺寸固定 4x5（太小看不出，太大会挤文字）
+        右 = self.width() - 12
+        中 = self.height() / 2
+        三角 = QPolygonF([
+            QPointF(右 - 4, 中 - 2.5),
+            QPointF(右 + 4, 中 - 2.5),
+            QPointF(右, 中 + 3.5),
+        ])
+        绘.drawPolygon(三角)
+        绘.end()
 
 
 class 顶行(QWidget):
@@ -465,6 +504,8 @@ class 主窗(QMainWindow):
     def _建界面(self):
         外框 = QWidget()
         外框.setObjectName("rootFrame")
+        # 存下来：最大化时要摘掉圆角，否则屏幕四角露出桌面
+        self.外框 = 外框
         外层 = QVBoxLayout(外框)
         外层.setContentsMargins(0, 0, 0, 0)
         外层.setSpacing(0)
@@ -504,6 +545,10 @@ class 主窗(QMainWindow):
         外层.addWidget(主体行, 1)
         外层.addWidget(self._建状态栏())
         self.setCentralWidget(外框)
+        # 无边框窗口默认没法用鼠标拖边缘改大小 —— 用户会觉得"窗口不能缩放"。
+        # 打开鼠标跟踪，由 event() 在边缘交给系统原生缩放。
+        self.setMouseTracking(True)
+        外框.setMouseTracking(True)
 
     def _建项目树(self):
         框 = QWidget()
@@ -1134,20 +1179,51 @@ class 主窗(QMainWindow):
         self.状态("运行窗口已%s" % ("显示" if self._运行可见 else "隐藏"))
 
     def 切换行号(self):
-        self.显示行号 = not self.显示行号
+        self.设行号(not self.显示行号)
+
+    def 设行号(self, 显示):
+        """显示/隐藏行号栏。设置窗口的勾选框直接调它，立刻生效。"""
+        self.显示行号 = bool(显示)
         for d in self.文档集:
-            d._行号隐藏 = not self.显示行号
-            d.行号.setVisible(self.显示行号)
-            d._更新行号宽()
+            d.设行号(self.显示行号)
         self.状态("行号已%s" % ("显示" if self.显示行号 else "隐藏"))
         self.存配置()
 
     def 切换缩进线(self):
-        self.显示缩进线 = not self.显示缩进线
+        self.设缩进线(not self.显示缩进线)
+
+    def 设缩进线(self, 显示):
+        self.显示缩进线 = bool(显示)
         for d in self.文档集:
-            d.update()
+            d.设缩进线(self.显示缩进线)
         self.状态("缩进参考线已%s" % ("显示" if self.显示缩进线 else "隐藏"))
         self.存配置()
+
+    def 设制表宽(self, 宽):
+        self.制表宽 = max(1, int(宽))
+        for d in self.文档集:
+            d.设制表宽(self.制表宽)
+        self.更新状态栏()
+        self.存配置()
+
+    def 设自动高亮(self, 开):
+        self.自动高亮 = bool(开)
+        for d in self.文档集:
+            d.设自动高亮(self.自动高亮)
+        self.存配置()
+
+    def 应用设置(self, 保存=True):
+        """把当前属性一次性推给所有已打开文档 + 立即重绘 + 写盘。
+
+        设置窗口里每改一项都会调这里（保存=False 时不写盘，等按「应用」
+        或「确定」再落盘）。这样所有开关都是**当场生效**，
+        不需要关掉软件重开 —— 这正是用户报的「设置应用不能马上生效」。
+        """
+        for d in self.文档集:
+            d.应用设置()
+        self.更新状态栏()
+        if 保存:
+            self.存配置()
 
     # ================= 运行 =================
 
@@ -1366,6 +1442,13 @@ class 主窗(QMainWindow):
         self.状态("字号 %d" % self.字号)
         self.存配置()
 
+    def 设字号(self, 字号):
+        """直接设定字号（设置窗口的下拉框用，避免「差多少」算错）。"""
+        字号 = max(9, min(22, int(字号)))
+        if 字号 == self.字号:
+            return
+        self.改字号(字号 - self.字号)
+
     def 换主题(self, 名):
         self.主题 = 主题.取主题(名, self.主题)
         self.主题名 = self.主题["名"]
@@ -1546,6 +1629,20 @@ class 主窗(QMainWindow):
             self.屑.setText("  ")
 
     def _应用窗口外观(self):
+        """深色标题栏 + 圆角。最大化时要反向操作，否则屏幕四角露桌面。
+
+        现象：用户报「全屏没占满」。实测窗口矩形已经精确等于屏幕可用区
+        （误差 0 像素），缺的就是四个角 —— #rootFrame 的 border-radius 12px
+        在最大化时仍然生效，加上 DWM 的圆角偏好，四角被切掉，
+        露出后面的桌面/阴影，看起来就像窗口小了一圈。
+        """
+        最大化 = bool(self.isMaximized())
+        if getattr(self, "外框", None) is not None:
+            # 最大化：圆角归零；还原：恢复 12px。交给 QSS 属性选择器，
+            # 不用手写 setStyleSheet（那会把整个主题样式覆盖掉）。
+            self.外框.setProperty("maximized", "true" if 最大化 else "false")
+            self.外框.style().unpolish(self.外框)
+            self.外框.style().polish(self.外框)
         try:
             import ctypes
 
@@ -1553,10 +1650,95 @@ class 主窗(QMainWindow):
             句柄 = int(self.winId())
             深 = ctypes.c_int(1 if self.主题名 == "深色" else 0)
             dwm.DwmSetWindowAttribute(句柄, 20, ctypes.byref(深), ctypes.sizeof(深))
-            圆 = ctypes.c_int(2)
+            # 33 = DWMWA_WINDOW_CORNER_PREFERENCE；2 = DWMWCP_ROUND
+            # 最大化时必须给 1（DWMWCP_DONOTROUND），否则四个角依旧被切。
+            圆 = ctypes.c_int(1 if 最大化 else 2)
             dwm.DwmSetWindowAttribute(句柄, 33, ctypes.byref(圆), ctypes.sizeof(圆))
         except Exception:
             pass
+
+    def changeEvent(self, 事件):
+        """最大化/还原时重算圆角。"""
+        super().changeEvent(事件)
+        from PySide6.QtCore import QEvent
+
+        if 事件.type() == QEvent.WindowStateChange:
+            self._应用窗口外观()
+
+    # —— 无边框窗口的边缘缩放 ——
+
+    #: 边缘判定宽度（逻辑像素）。太窄不好抓，太宽会误伤内容区。
+    边缘距 = 6
+
+    def _落在边缘(self, 全局点):
+        """这个全局坐标落在窗口的哪条边/角上（不在边缘返回 None）。"""
+        if self.isMaximized() or self.isFullScreen():
+            return None
+        局 = self.mapFromGlobal(全局点)
+        x, y = 局.x(), 局.y()
+        宽, 高 = self.width(), self.height()
+        距 = self.边缘距
+        if not (-距 <= x <= 宽 + 距 and -距 <= y <= 高 + 距):
+            return None
+        左, 右 = x < 距, x > 宽 - 距
+        上, 下 = y < 距, y > 高 - 距
+        边 = Qt.Edges()
+        if 左:
+            边 |= Qt.LeftEdge
+        elif 右:
+            边 |= Qt.RightEdge
+        if 上:
+            边 |= Qt.TopEdge
+        elif 下:
+            边 |= Qt.BottomEdge
+        return 边 or None
+
+    @staticmethod
+    def _边缘光标(边):
+        """边缘对应的缩放光标，让用户看得出来这里能拖。"""
+        if 边 is None:
+            return None
+        左右 = bool(边 & (Qt.LeftEdge | Qt.RightEdge))
+        上下 = bool(边 & (Qt.TopEdge | Qt.BottomEdge))
+        if 左右 and 上下:
+            # 左上/右下 用主对角线，右上/左下 用副对角线
+            主对角 = bool(边 & Qt.LeftEdge) == bool(边 & Qt.TopEdge)
+            return Qt.SizeFDiagCursor if 主对角 else Qt.SizeBDiagCursor
+        if 左右:
+            return Qt.SizeHorCursor
+        return Qt.SizeVerCursor
+
+    def event(self, 事件):
+        """把边缘按下交给系统做原生缩放。
+
+        无边框窗口（FramelessWindowHint）默认既不能拖边改大小、
+        也没有系统的缩放光标 —— 用户会觉得「窗口尺寸锁死了」。
+        这里在边缘按下时调用 startSystemResize，交给 Windows 自己处理，
+        缩放体验和普通窗口完全一致（含贴边分屏）。
+        """
+        from PySide6.QtCore import QEvent
+
+        if 事件.type() == QEvent.MouseButtonPress and 事件.button() == Qt.LeftButton:
+            边 = self._落在边缘(事件.globalPosition().toPoint())
+            if 边 is not None:
+                句柄 = self.windowHandle()
+                if 句柄 is not None and 句柄.startSystemResize(边):
+                    return True
+        return super().event(事件)
+
+    def mouseMoveEvent(self, 事件):
+        """鼠标靠近边缘时换成缩放光标。
+
+        只有真正能拖的时候光标才会变 —— 否则用户根本不知道无边框窗口
+        还能改大小（系统不会替 FramelessWindowHint 做这件事）。
+        """
+        边 = self._落在边缘(事件.globalPosition().toPoint())
+        光标 = self._边缘光标(边)
+        if 光标 is not None:
+            self.setCursor(光标)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(事件)
 
     def 存配置(self):
         """把界面状态写盘，下次启动还原。"""

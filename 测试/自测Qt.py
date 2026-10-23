@@ -13,13 +13,14 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.argv = [sys.argv[0]]
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
 
 import 核工坊Qt as gq
 import 查找对话框
 import 设置窗口Qt
+import 配置
 
 失败 = []
 
@@ -36,6 +37,9 @@ def 主():
     应用 = QApplication(sys.argv)
     应用.setApplicationName("核工坊")
     目录 = tempfile.mkdtemp(prefix="核工坊Qt测试_")
+    # 隔离配置：本测试会改字号/缩进/行号并写盘。若指向真实配置目录，
+    # 跑一次就把用户的界面设置覆盖掉（曾经把制表宽留成 2）。
+    os.environ["核工坊_配置目录"] = tempfile.mkdtemp(prefix="核工坊Qt配置_")
 
     print("[启动]")
     窗 = gq.主窗()
@@ -129,7 +133,10 @@ def 主():
     应用.processEvents()
     行 = 编3.取文本().splitlines()
     缩进 = len(行[-1]) - len(行[-1].lstrip()) if 行 else 0
-    检查(缩进 == 4, "冒号后自动缩进 4 空格（实际 %d）" % 缩进)
+    # 断言的是「等于当前制表宽」，不写死 4：用户在设置里把缩进改成 2
+    # 之后，程序行为是对的，写死 4 反而误报。
+    检查(缩进 == 编3.制表宽,
+         "冒号后自动缩进 %d 空格（应等于制表宽 %d）" % (缩进, 编3.制表宽))
 
     print("[查找替换]")
     编3.置文本("甲\n乙\n甲\n")
@@ -303,6 +310,155 @@ def 主():
         for 键 in ("文本", "次要文本", "行号字", "注释"):
             值 = _比(表[键], 底)
             检查(值 >= 4.5, "%s %s 对比度 %.2f ≥ 4.5" % (名, 键, 值))
+
+    print("[行号与正文逐行对齐]")
+    # 用户报「行标是歪的」。根因：blockBoundingGeometry 给的是内容坐标，
+    # 加 contentOffset() 是**视口坐标**，上一版又减了一次行号栏自己的 y()，
+    # 等于整体上移 6px。这里逐行量：行号该画的位置 == 光标所在的 y。
+    _编2 = 窗.当前
+    _编2.设行号(True)
+    _编2.置文本("第一行\n第二行\n第三行\n第四行\n第五行\n")
+    应用.processEvents()
+    for _ in range(6):
+        应用.processEvents()
+    _视口 = _编2.viewport()
+    _块 = _编2.firstVisibleBlock()
+    _对齐差 = []
+    for _i in range(5):
+        _游 = QTextCursor(_块)
+        _游.movePosition(QTextCursor.StartOfBlock)
+        _光标顶 = _编2.cursorRect(_游).top()
+        _应 = (_视口.mapToGlobal(QPoint(0, _光标顶)).y()
+               - _编2.行号.mapToGlobal(QPoint(0, 0)).y())
+        if abs(_应 - _光标顶) > 1:
+            _对齐差.append((_i + 1, _光标顶, _应))
+        _块 = _块.next()
+    检查(not _对齐差, "五行行号与正文对齐" + ("（偏差：%s）" % _对齐差 if _对齐差 else ""))
+
+    print("[缩进线不压正文]")
+    # 缩进 1 级的行不该画线：线画在 x=16，正文从 x=19 起，只差 3px，
+    # 看起来就像行首多了一个竖线字符。
+    import inspect as _inspect
+
+    import 编辑器 as _E
+
+    _线源 = _inspect.getsource(_E.编辑器._画缩进线)
+    检查("range(1, 级)" in _线源 and "range(1, 级 + 1)" not in _线源,
+         "缩进线只画外层层级")
+
+    print("[最大化不留圆角缺口]")
+    # 用户报「全屏没占满」：窗口矩形其实精确等于屏幕可用区，
+    # 缺的是四角 —— #rootFrame 的圆角在最大化时仍在，切掉了四个角。
+    _窗 = 窗
+    _窗.showMaximized()
+    应用.processEvents()
+    for _ in range(20):
+        应用.processEvents()
+    _图 = _窗.grab().toImage()
+    _w, _h = _图.width(), _图.height()
+    _底 = _窗.主题["窗口"].lower()
+    _角色 = {_图.pixelColor(x, y).name().lower() for x, y in
+             ((0, 0), (_w - 1, 0), (0, _h - 1), (_w - 1, _h - 1))}
+    检查(_角色 == {_底}, "最大化四角都是窗口底色 %s（实际 %s）" % (_底, _角色))
+    _窗.showNormal()
+    应用.processEvents()
+
+    print("[设置即时生效、无需重启]")
+    # 用户报「设置应用不能马上生效，必须重启软件」。
+    # 四个开关逐个验证：主窗属性 + 编辑器实际状态都要当场变。
+    _窗.设行号(True)
+    _窗.设缩进线(True)
+    _窗.设制表宽(4)
+    _窗.设自动高亮(True)
+    _窗.设字号(12)
+    应用.processEvents()
+    _框 = 设置窗口Qt.设置对话框(_窗)
+    _编S = _窗.当前
+
+    _框.勾行号.setChecked(False)
+    应用.processEvents()
+    检查((not _窗.显示行号) and (not _编S.行号.isVisible())
+          and _编S._行号隐藏, "关行号当场生效")
+    _框.勾行号.setChecked(True)
+    应用.processEvents()
+    检查(_窗.显示行号 and _编S.行号.isVisible(), "开行号当场生效")
+
+    _框.勾缩进线.setChecked(False)
+    应用.processEvents()
+    检查((not _窗.显示缩进线) and (not _编S._缩进线开), "关缩进线当场生效")
+
+    _框.缩进框.setCurrentIndex(_框.缩进框.findData(2))
+    应用.processEvents()
+    检查(_窗.制表宽 == 2 and _编S.制表宽 == 2, "改制表宽当场生效")
+
+    # 这个勾选框曾经根本没连信号，点了什么也不发生
+    _框.勾高亮.setChecked(False)
+    应用.processEvents()
+    检查(_窗.自动高亮 is False and _编S.高亮.开 is False, "关自动高亮当场生效")
+    _框.勾高亮.setChecked(True)
+    应用.processEvents()
+    检查(_窗.自动高亮 is True and _编S.高亮.开 is True, "开自动高亮当场生效")
+
+    _框.字号框.setCurrentIndex(_框.字号框.findData(16))
+    应用.processEvents()
+    检查(_窗.字号 == 16 and _编S.字号 == 16, "改字号当场生效")
+
+    # 「应用」必须写盘（以前只喊一句「已应用」，什么都不存）
+    _框.应用()
+    应用.processEvents()
+    _盘 = 配置.读配置()
+    检查(_盘.get("字号") == 16 and _盘.get("制表宽") == 2
+          and _盘.get("行号") is True and _盘.get("缩进线") is False,
+         "按应用后设置已写盘")
+
+    # 「取消」必须每一项都还原（以前只还原主题和字号）
+    _框2 = 设置窗口Qt.设置对话框(_窗)
+    _框2.缩进框.setCurrentIndex(_框2.缩进框.findData(8))
+    _框2.勾高亮.setChecked(False)
+    _框2.字号框.setCurrentIndex(_框2.字号框.findData(10))
+    应用.processEvents()
+    _框2.取消()
+    应用.processEvents()
+    检查(_窗.制表宽 == 2 and _窗.自动高亮 is True and _窗.字号 == 16,
+         "取消后每一项都还原")
+
+    # 收尾：恢复正常值，后面的测试按默认制表宽走
+    _窗.设制表宽(4)
+    _窗.设字号(12)
+    _窗.设行号(True)
+    _窗.设缩进线(True)
+    _窗.设自动高亮(True)
+    应用.processEvents()
+
+    print("[无边框窗口可拖边缩放]")
+    # FramelessWindowHint 的窗口系统不会给边缘缩放，得自己调
+    # startSystemResize。否则用户会觉得「窗口尺寸锁死了」。
+    _窗3 = 窗
+    _窗3.resize(1100, 760)
+    应用.processEvents()
+    _w3, _h3 = _窗3.width(), _窗3.height()
+    _检查边 = [
+        ("左", (0, _h3 // 2), Qt.LeftEdge),
+        ("右", (_w3 - 1, _h3 // 2), Qt.RightEdge),
+        ("上", (_w3 // 2, 0), Qt.TopEdge),
+        ("下", (_w3 // 2, _h3 - 1), Qt.BottomEdge),
+    ]
+    _边错 = []
+    for _名, (_x, _y), _望 in _检查边:
+        _得 = _窗3._落在边缘(_窗3.mapToGlobal(QPoint(_x, _y)))
+        if _得 != _望:
+            _边错.append((_名, _得, _望))
+    检查(not _边错, "四边都能识别为可缩放边缘" + ("（%s）" % _边错 if _边错 else ""))
+    # 边缘内 20px 不该被当成边缘，否则会抢掉正常点击
+    检查(_窗3._落在边缘(_窗3.mapToGlobal(QPoint(20, _h3 // 2))) is None,
+         "离边 20px 不误判为边缘")
+    # 光标要跟着边变，否则看不出能拖
+    检查(gq.主窗._边缘光标(Qt.LeftEdge) == Qt.SizeHorCursor,
+         "左右边是水平缩放光标")
+    检查(gq.主窗._边缘光标(Qt.TopEdge) == Qt.SizeVerCursor,
+         "上下边是垂直缩放光标")
+    检查(gq.主窗._边缘光标(Qt.LeftEdge | Qt.TopEdge) == Qt.SizeFDiagCursor,
+         "左上角是对角缩放光标")
 
     print("[关闭文档]")
     for 文档 in list(窗.文档集):

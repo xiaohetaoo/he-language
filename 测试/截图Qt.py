@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """生成 README / 说明.md 用的界面截图（Qt 版）。
 
+截图一律用 窗口.grab()：屏幕抓图会被其他窗口遮挡，
+PrintWindow 又会丢 DWM 标题栏，只有进程内渲染最可靠。
+
 用法：python 测试/截图Qt.py
 """
 import os
@@ -17,50 +20,59 @@ import 核工坊Qt
 import 设置窗口Qt
 
 
+def 等(应用, 次=12):
+    for _ in range(次):
+        应用.processEvents()
+
+
 def 主():
     应用 = QApplication.instance() or QApplication(sys.argv)
     窗 = 核工坊Qt.主窗()
-    窗.resize(1400, 880)
+    窗.resize(1500, 940)
     窗.show()
+    等(应用, 20)
 
-    def 一():
-        窗.换主题("深色")
-        窗.打开(os.path.join(根, "例子", "03_容器与函数.xht"))
-        QTimer.singleShot(700, 二)
+    # 直接用例子文件，截图里就是用户真能看到的代码
+    窗.换主题("深色")
+    窗.打开(os.path.join(根, "例子", "03_容器与函数.xht"))
+    等(应用, 20)
+    窗.grab().toImage().save(os.path.join(根, "截图_核工坊.png"))
+    print("深色 ok", flush=True)
 
-    def 二():
-        窗.grab().toImage().save(os.path.join(根, "截图_核工坊.png"))
-        print("深色 ok", flush=True)
-        窗.换主题("浅色")
-        QTimer.singleShot(700, 三)
+    # 行号对齐特写（用户报过「行标是歪的」，这里留一张能看清的证据图）
+    if 窗.当前 is not None:
+        窗.当前.grab().toImage().copy(0, 0, 560, 210).save(
+            os.path.join(根, "截图_行号对齐.png")
+        )
+        print("行号特写 ok", flush=True)
 
-    def 三():
-        窗.grab().toImage().save(os.path.join(根, "截图_核工坊_浅色.png"))
-        print("浅色 ok", flush=True)
-        # 欢迎页：关掉全部文档
-        for 文档 in list(窗.文档集):
-            文档.已改 = False
-            窗.关闭文档(文档, 强制=True)
-        QTimer.singleShot(600, 四)
+    # 设置窗口
+    框 = 设置窗口Qt.设置对话框(窗)
+    框.resize(760, 580)
+    框.show()
+    等(应用, 15)
+    框.grab().toImage().save(os.path.join(根, "截图_设置.png"))
+    print("设置 ok", flush=True)
+    框.close()
+    等(应用, 5)
 
-    def 四():
-        窗.grab().toImage().save(os.path.join(根, "截图_欢迎页.png"))
-        print("欢迎页 ok", flush=True)
-        对 = 设置窗口Qt.设置对话框(窗)
-        对.show()
-        状态["对"] = 对  # 用容器保存引用，闭包里直接赋值不会传出去
-        QTimer.singleShot(600, 五)
+    # 浅色
+    窗.换主题("浅色")
+    等(应用, 20)
+    窗.grab().toImage().save(os.path.join(根, "截图_核工坊_浅色.png"))
+    print("浅色 ok", flush=True)
 
-    def 五():
-        设置窗 = 状态.get("对")
-        if 设置窗 is not None:
-            设置窗.grab().save(os.path.join(根, "截图_设置.png"))
-            print("设置 ok", flush=True)
-        应用.quit()
+    # 欢迎页：关掉全部文档
+    窗.换主题("深色")
+    for 编 in list(窗.文档集):
+        编.已改 = False
+        窗.关闭文档(编, 强制=True)
+    等(应用, 15)
+    窗.grab().toImage().save(os.path.join(根, "截图_欢迎页.png"))
+    print("欢迎页 ok", flush=True)
 
-    状态 = {}
-    QTimer.singleShot(400, 一)
-    return 应用.exec()
+    窗.close()
+    return 0
 
 
 if __name__ == "__main__":

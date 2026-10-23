@@ -13,6 +13,11 @@ import sys
 
 
 def 配置目录():
+    # 测试可以设 核工坊_配置目录 指到临时目录 —— 否则跑一轮测试就把
+    # 用户真实的界面设置写坏了（曾经把制表宽写成 2，导致后续自测失败）。
+    覆盖 = os.environ.get("核工坊_配置目录")
+    if 覆盖:
+        return 覆盖
     if getattr(sys, "frozen", False):
         基 = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(基, "核工坊")
