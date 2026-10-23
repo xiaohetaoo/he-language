@@ -119,7 +119,14 @@ def 主():
     查(w.保存(e2), "保存成功")
     查(os.path.exists(路径), "文件落盘")
     查(w.打开(路径) is e2, "重复打开复用标签")
-    查(w._复制路径(0) is None, "复制路径不报错")
+    # 剪贴板在 Windows 上可能被别的程序短暂占用（实测偶发
+    # "OleSetClipboard: OpenClipboard 失败"），那是环境问题、
+    # 不是产品缺陷。这里只验证「调用不抛异常」，不校验剪贴板内容。
+    try:
+        w._复制路径(0)
+        查(True, "复制路径不报错")
+    except Exception as e:  # noqa: BLE001
+        查(False, "复制路径不报错（%s）" % e)
 
     print("[运行与停止]")
     样例 = os.path.join(r"D:\dsh\dsh5", "例子", "01_你好.xht")

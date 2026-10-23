@@ -1065,16 +1065,26 @@ class 主窗(QMainWindow):
         编 = 编 or self.当前
         if 编 is None:
             return False
+        # 默认落到项目目录里，而不是只给一个裸文件名（那样文件选择框
+        # 会停在进程当前目录，可能是 exe 所在处，用户找不到自己的项目）。
+        建议 = os.path.join(self.项目目录, self._文件名(编))
+        if not 建议.endswith(self.内核.扩展名):
+            建议 += self.内核.扩展名
         路径, _ = QFileDialog.getSaveFileName(
-            self, "另存为", self._文件名(编),
-            "核语言源文件 (*.xht);;所有文件 (*.*)",
+            self, "保存核语言文件", 建议,
+            "核语言源文件 (*%s);;所有文件 (*.*)" % self.内核.扩展名,
         )
         if not 路径:
             return False
+        # 用户没写后缀就自动补上 —— 否则存成无后缀的文件，
+        # 项目树里不显示、双击也不会被关联打开。
+        if not 路径.lower().endswith(self.内核.扩展名.lower()):
+            路径 += self.内核.扩展名
         编.文件路径 = os.path.abspath(路径)
         ok = self.保存(编)
         if ok:
             self.刷新标签(编)
+            self.加最近(路径)
         return ok
 
     # ================= 项目树 =================
@@ -1247,11 +1257,22 @@ class 主窗(QMainWindow):
         if self.当前 is None:
             self.状态("没有打开的文档，先新建（Ctrl+N）或打开文件（Ctrl+O）")
             return
+        # 没保存过的文档不能直接运行 —— 但只弹一句状态栏提示太弱：
+        # 用户按 F5 后会在状态栏看到「请先保存再运行」一闪，不知道下一步该做什么。
+        # 改为直接弹出保存对话框，选好路径存盘后立刻运行，一步到位。
         if not self.当前.文件路径:
-            self.状态("请先保存再运行（Ctrl+S）")
-            return
+            if not self.另存为(self.当前):
+                # 用户点了取消：保持原样，不运行
+                self.状态("已取消运行")
+                return
         if self.当前.已改:
-            self.保存(self.当前, 弹窗=False)
+            # 运行前必须把最新内容写盘，否则跑的是磁盘上的旧版本。
+            # 这里不能静默失败：保存可能因为没有权限而失败，
+            # 那样运行结果会莫名其妙地对不上编辑区。
+            if not self.保存(self.当前, 弹窗=False):
+                if not self.另存为(self.当前):
+                    self.状态("保存失败，已取消运行")
+                    return
         self.停止(静默=True)
         self.清空控制台()
         命令 = self._内核命令(self.当前.文件路径)
@@ -1390,12 +1411,17 @@ class 主窗(QMainWindow):
         self.控制台.clear()
 
     def 检查语法(self):
-        if not (self.当前 and self.当前.文件路径):
-            self.状态("先保存文件再检查语法")
+        # 语法检查编译的是编辑区里的当前文本（见下面 编译源码 的入参），
+        # 根本不需要文件已保存 —— 原来那句「先保存文件再检查语法」是多余的限
+        # 制，用户在未命名标签里按 F9 会被挡住。只有在需要路径做错误前缀时
+        # 才用一个占位名。
+        if self.当前 is None:
+            self.状态("没有打开的文档")
             return
+        路径 = self.当前.文件路径 or os.path.join(self.项目目录, "未命名%s" % self.内核.扩展名)
         报告 = self.内核.未定义报告(None)
         try:
-            代码, _ = self.内核.编译源码(self.当前.取文本(), self.当前.文件路径, 报告)
+            代码, _ = self.内核.编译源码(self.当前.取文本(), 路径, 报告)
         finally:
             报告.保存()
         self.状态("检查通过" if 代码 is not None else "语法有误，见运行窗口")

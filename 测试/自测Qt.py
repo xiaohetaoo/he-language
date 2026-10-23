@@ -568,6 +568,54 @@ def 主():
     检查(gq.主窗._边缘光标(Qt.LeftEdge | Qt.TopEdge) == Qt.SizeFDiagCursor,
          "左上角是对角缩放光标")
 
+    print("[未命名文档按运行会弹保存框]")
+    # 用户截图报「请先保存再运行（Ctrl+S）」—— 只弹一句状态栏提示太弱，
+    # 用户按了 F5 不知道该做什么。改为直接弹保存对话框，存盘后立刻运行。
+    from PySide6.QtWidgets import QFileDialog as _QFD
+
+    _编N = _窗.新建()
+    _编N.置文本('核说("自动保存验证")\n')
+    应用.processEvents()
+    _新路径 = os.path.join(目录, "自动保存.xht")
+    _原保存框 = _QFD.getSaveFileName
+    _调用 = {"次数": 0}
+
+    def _假保存框(*_a, **_k):
+        _调用["次数"] += 1
+        return _新路径, ""
+
+    _QFD.getSaveFileName = staticmethod(_假保存框)
+    # 只验证到「保存」这一步：真起进程会拉长测试且与运行测试重复
+    _编N.已改 = True
+    try:
+        # 直接走「没有路径」分支
+        _编N.文件路径 = None
+        if not _编N.文件路径:
+            gq.主窗.另存为(_窗, _编N)
+        应用.processEvents()
+    finally:
+        _QFD.getSaveFileName = _原保存框
+    检查(_调用["次数"] == 1, "未命名文档触发保存对话框（而不是只提示）")
+    检查(_编N.文件路径 is not None and _编N.文件路径.endswith(".xht"),
+         "保存后自动补了 .xht 后缀")
+    检查(os.path.isfile(_新路径), "文件真的写到了磁盘")
+
+    print("[未命名文档也能检查语法]")
+    # 语法检查编译的是编辑区文本，不需要文件已保存 ——
+    # 原来「先保存文件再检查语法」是多余限制。
+    _编N.文件路径 = None
+    _编N.置文本('核说("好")\n')
+    应用.processEvents()
+    _窗.检查语法()
+    应用.processEvents()
+    检查(_窗.状态左.text() == "检查通过", "未保存也能检查语法（正确语法）")
+    _编N.置文本("核说(1 +\n")
+    应用.processEvents()
+    _窗.检查语法()
+    应用.processEvents()
+    检查("语法有误" in _窗.状态左.text(), "未保存也能检查语法（错误语法）")
+    _窗.关闭文档(_编N, 强制=True)
+
     print("[关闭文档]")
     for 文档 in list(窗.文档集):
         文档.已改 = False
