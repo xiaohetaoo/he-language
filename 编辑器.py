@@ -163,6 +163,9 @@ class 编辑器(QPlainTextEdit):
         self.textChanged.connect(self._文本变化)
 
         self.高亮 = 高亮器(self.document(), 主窗)
+        # 尊重主窗口的「显示行号」开关
+        if not getattr(主窗, "显示行号", True):
+            self.行号.setVisible(False)
         self._更新行号宽()
         self._当前行变化()
 
@@ -189,7 +192,8 @@ class 编辑器(QPlainTextEdit):
     # —— 行号 ——
 
     def _更新行号宽(self, _=None):
-        self.setViewportMargins(self.行号.宽度, 0, 0, 0)
+        左边距 = self.行号.宽度 if self.行号.isVisible() else 0
+        self.setViewportMargins(左边距, 0, 0, 0)
 
     def _更新行号区(self, 矩形, 滚动):
         if 滚动:

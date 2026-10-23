@@ -360,6 +360,8 @@ class 主窗(QMainWindow):
         self.树 = QTreeWidget()
         self.树.setHeaderHidden(True)
         self.树.itemDoubleClicked.connect(self._双击树)
+        self.树.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.树.customContextMenuRequested.connect(self._树右键)
         布局.addWidget(self.树, 1)
 
         框.setMinimumWidth(180)
@@ -377,6 +379,10 @@ class 主窗(QMainWindow):
         self.标签栏.currentChanged.connect(self._切标签)
         self.标签栏.setTabsClosable(True)
         self.标签栏.tabCloseRequested.connect(self._关标签)
+        # 中键点击标签关闭（与浏览器/PyCharm 一致）；右键弹菜单
+        self.标签栏.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.标签栏.customContextMenuRequested.connect(self._标签右键)
+        self.标签栏.mousePressEvent = self._标签按下
         布局.addWidget(self.标签栏)
 
         self.屑 = QLabel("  ")
@@ -554,6 +560,7 @@ class 主窗(QMainWindow):
             ("Ctrl+Shift+S", self.另存为),
             ("Ctrl+N", self.新建),
             ("Ctrl+O", self.打开文件),
+            ("Ctrl+P", self.快速打开),
             ("Ctrl+W", self.关闭当前),
             ("Ctrl+F", self.查找),
             ("Ctrl+G", self.跳到行),
@@ -597,6 +604,53 @@ class 主窗(QMainWindow):
             # 已经连过或对象即将销毁；不影响功能
             pass
         编.setFocus()
+
+    def _标签按下(self, 事件):
+        索引 = self.标签栏.tabAt(事件.position().toPoint())
+        if 事件.button() == Qt.MiddleButton and 索引 >= 0:
+            self._关标签(索引)
+            return
+        QTabBar.mousePressEvent(self.标签栏, 事件)
+
+    def _标签右键(self, 位置):
+        索引 = self.标签栏.tabAt(位置)
+        if 索引 < 0:
+            return
+        菜单 = QMenu(self)
+        for 名, 命令 in (
+            ("关闭", lambda: self._关标签(索引)),
+            ("关闭其他", lambda: self._关闭其他标签(索引)),
+            ("复制文件路径", lambda: self._复制路径(索引)),
+            ("在文件管理器中显示", lambda: self._在管理器显示(索引)),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            菜单.addAction(动作)
+        菜单.exec(self.标签栏.mapToGlobal(位置))
+
+    def _关闭其他标签(self, 保留):
+        保留文档 = self.文档集[保留] if 0 <= 保留 < len(self.文档集) else None
+        for 编 in list(self.文档集):
+            if 编 is not 保留文档:
+                编.已改 = False
+                self.关闭文档(编, 强制=True)
+
+    def _复制路径(self, 索引):
+        if 0 <= 索引 < len(self.文档集):
+            路径 = self.文档集[索引].文件路径
+            if 路径:
+                应用 = QApplication.instance()
+                应用.clipboard().setText(路径)
+                self.状态("路径已复制")
+
+    def _在管理器显示(self, 索引):
+        if 0 <= 索引 < len(self.文档集):
+            路径 = self.文档集[索引].文件路径
+            if 路径 and os.path.exists(路径):
+                try:
+                    subprocess.run(["explorer", "/select,", os.path.normpath(路径)])
+                except OSError:
+                    self.状态("打不开文件管理器")
 
     def _切标签(self, 索引):
         if 0 <= 索引 < len(self.文档集):
@@ -779,6 +833,49 @@ class 主窗(QMainWindow):
         elif os.path.isfile(路径):
             self.打开(路径)
 
+    def _树右键(self, 位置):
+        项 = self.树.itemAt(位置)
+        if 项 is None:
+            return
+        路径 = 项.data(0, Qt.UserRole)
+        if not 路径:
+            return
+        self.树.setCurrentItem(项)
+        菜单 = QMenu(self)
+        if os.path.isdir(路径):
+            for 名, 命令 in (
+                ("设为项目文件夹", lambda: self.装载项目树(路径)),
+                ("在文件管理器中打开", lambda: self._在管理器显示路径(路径)),
+            ):
+                动作 = QAction(名, self)
+                动作.triggered.connect(lambda _=False, c=命令: c())
+                菜单.addAction(动作)
+        else:
+            for 名, 命令 in (
+                ("打开", lambda: self.打开(路径)),
+                ("复制路径", lambda: QApplication.instance().clipboard().setText(路径)),
+                ("在文件管理器中显示", lambda: self._在管理器显示路径(路径)),
+            ):
+                动作 = QAction(名, self)
+                动作.triggered.connect(lambda _=False, c=命令: c())
+                菜单.addAction(动作)
+        菜单.addSeparator()
+        刷新 = QAction("刷新项目树", self)
+        刷新.triggered.connect(lambda: self.装载项目树(self.项目目录))
+        菜单.addAction(刷新)
+        菜单.exec(self.树.mapToGlobal(位置))
+
+    def _在管理器显示路径(self, 路径):
+        if not os.path.exists(路径):
+            return
+        try:
+            if os.path.isdir(路径):
+                subprocess.run(["explorer", os.path.normpath(路径)])
+            else:
+                subprocess.run(["explorer", "/select,", os.path.normpath(路径)])
+        except OSError:
+            self.状态("打不开文件管理器")
+
     def 收起项目树(self):
         self.树.collapseAll()
         self.状态("已收起项目树")
@@ -797,6 +894,21 @@ class 主窗(QMainWindow):
         self._运行可见 = not self._运行可见
         self.运行框.setVisible(self._运行可见)
         self.状态("运行窗口已%s" % ("显示" if self._运行可见 else "隐藏"))
+
+    def 切换行号(self):
+        self.显示行号 = not self.显示行号
+        for d in self.文档集:
+            d.行号.setVisible(self.显示行号)
+            d._更新行号宽()
+        self.状态("行号已%s" % ("显示" if self.显示行号 else "隐藏"))
+        self.存配置()
+
+    def 切换缩进线(self):
+        self.显示缩进线 = not self.显示缩进线
+        for d in self.文档集:
+            d.update()
+        self.状态("缩进参考线已%s" % ("显示" if self.显示缩进线 else "隐藏"))
+        self.存配置()
 
     # ================= 运行 =================
 
@@ -975,6 +1087,15 @@ class 主窗(QMainWindow):
         if self.当前:
             self.当前.切换注释()
 
+    def 快速打开(self):
+        try:
+            import 快速打开
+
+            self._快速 = 快速打开.快速打开(self)
+            self._快速.exec()
+        except Exception as e:  # noqa: BLE001
+            self.状态("快速打开失败：%s" % e)
+
     def 查找(self):
         """Ctrl+F：优先用顶行搜索框的内容，否则打开查找对话框。"""
         文 = self.顶行.搜索.text().strip()
@@ -1051,6 +1172,7 @@ class 主窗(QMainWindow):
         for 名, 命令 in (
             ("新建", self.新建),
             ("打开…", self.打开文件),
+            ("快速打开…", self.快速打开),
             ("打开文件夹…", self.选择项目目录),
             ("保存", self.保存当前),
             ("另存为…", self.另存为),
@@ -1079,6 +1201,22 @@ class 主窗(QMainWindow):
         for 名, 命令 in (
             ("撤销", lambda: self.当前 and self.当前.undo()),
             ("重做", lambda: self.当前 and self.当前.redo()),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            编.addAction(动作)
+        编.addSeparator()
+        for 名, 命令 in (
+            ("剪切", lambda: self.当前 and self.当前.cut()),
+            ("复制", lambda: self.当前 and self.当前.copy()),
+            ("粘贴", lambda: self.当前 and self.当前.paste()),
+            ("全选", lambda: self.当前 and self.当前.selectAll()),
+        ):
+            动作 = QAction(名, self)
+            动作.triggered.connect(lambda _=False, c=命令: c())
+            编.addAction(动作)
+        编.addSeparator()
+        for 名, 命令 in (
             ("注释 / 取消注释", self.切换注释),
             ("查找 / 替换…", self.查找),
             ("转到行…", self.跳到行),
@@ -1107,6 +1245,8 @@ class 主窗(QMainWindow):
             ("项目栏", self.切换项目栏),
             ("语法对照表", self.切换对照表),
             ("运行窗口", self.切换运行窗),
+            ("显示行号", self.切换行号),
+            ("显示缩进参考线", self.切换缩进线),
             ("增大字号", lambda: self.改字号(1)),
             ("减小字号", lambda: self.改字号(-1)),
         ):
