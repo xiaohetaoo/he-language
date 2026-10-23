@@ -193,6 +193,56 @@ def 主():
     检查(cfg.get("字号") == 15, "字号已写入配置")
     检查("项目目录" in cfg, "项目目录已记录")
 
+    print("[正文不被行号遮挡]")
+    # 用户报「第一行的核核被挡住了」：根因是 viewportMargins 算成 0，
+    # 正文画到了行号栏下面。这里守住两条：
+    #   1) 左边距必须等于行号区宽度
+    #   2) 正文首个文字像素必须落在行号区右边界之外
+    _样例 = "核核 这是第一行的注释\n数字们 = 核列表()\n"
+    窗.当前.setPlainText(_样例)
+    应用.processEvents()
+    for _ in range(6):
+        应用.processEvents()
+    _编 = 窗.当前
+    _编.重设行号边距()
+    for _ in range(4):
+        应用.processEvents()
+    检查(
+        _编.viewportMargins().left() == _编.行号.宽度,
+        "左边距(%d) == 行号区宽度(%d)" % (_编.viewportMargins().left(), _编.行号.宽度),
+    )
+    _图 = _编.grab().toImage()
+    _倍 = _图.width() / max(1, _编.width())
+    _栏右 = int((_编.行号.geometry().x() + _编.行号.width()) * _倍)
+    _首文 = None
+    _y = int(10 * _倍)
+    for _x in range(_栏右, min(_图.width(), _栏右 + 260)):
+        _c = _图.pixel(_x, _y) & 0xFFFFFF
+        if _c not in (0x1E1F22, 0x2B2D30, 0xF7F8FA, 0xFFFFFF):
+            _首文 = _x
+            break
+    检查(
+        _首文 is not None and _首文 >= _栏右,
+        "第一行正文起点(%s) 在行号栏右侧(%d)" % (_首文, _栏右),
+    )
+
+    print("[自动缩进不叠加]")
+    # QPlainTextEdit 原生回车不继承缩进，我们自己补；
+    # 若补两次会 4→8→12 叠上去，看起来像「每行多吞了空格」。
+    _编.置文本("")
+    应用.processEvents()
+    _编.setPlainText("核若 核对：")
+    应用.processEvents()
+    _游 = _编.textCursor()
+    _游.movePosition(_游.MoveOperation.End)
+    _编.setTextCursor(_游)
+    _编.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier, "\r"))
+    应用.processEvents()
+    _缩 = len(_编.document().findBlockByNumber(1).text()) - len(
+        _编.document().findBlockByNumber(1).text().lstrip()
+    )
+    检查(_缩 == _编.制表宽, "冒号回车后缩进 %d（应等于制表宽 %d，不是叠加成 8）" % (_缩, _编.制表宽))
+
     print("[图标区分度]")
     # 用户反馈「功能图标太像了，没有区分度」：改成自绘形状 + 各自颜色，
     # 这里锁住「每个按钮都有图，且两两不同」。

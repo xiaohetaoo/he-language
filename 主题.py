@@ -153,6 +153,13 @@ QToolTip {
 }
 #menuBtn:hover { background: __悬停__; color: __文本__; }
 
+/* 品牌字样（标志旁边那个「核工坊」） */
+#品牌字 {
+    color: __文本__; font-size: 14px; font-weight: bold;
+    background: transparent; padding: 2px 4px; border-radius: 6px;
+}
+#品牌字:hover { background: __悬停__; }
+
 /* 窗口按钮 */
 #winBtn {
     color: __次要文本__; font-size: 13px;
@@ -223,6 +230,9 @@ QTabBar::close-button {
 /* 编辑器 */
 QPlainTextEdit, QTextEdit {
     background: __编辑器__; color: __文本__;
+    /* padding 的左右必须是 0：行号栏的宽度由 setViewportMargins 精确预留，
+       这里再给左右 padding 会把文字又往里推（或覆盖掉视口左边距，
+       导致文字贴到最左边、和行号重叠，看起来就像每行开头被切掉了）。 */
     border: none; padding: 6px 0px;
     selection-background-color: __选区__; selection-color: __文本__;
 }

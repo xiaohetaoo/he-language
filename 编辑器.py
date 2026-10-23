@@ -96,8 +96,19 @@ class 行号区(QWidget):
     def __init__(self, 编辑器):
         super().__init__(编辑器)
         self.编辑器 = 编辑器
+        # 宽度按「最大行号位数」自适应，至少 3 位（58px）。
+        # 太窄时两位数就挤到边缘，正文看起来像被行号压住了。
         self.宽度 = 58
         self.setFixedWidth(self.宽度)
+
+    def 按行号调整宽度(self, 总行数):
+        位数 = max(3, len(str(max(1, 总行数))))
+        新宽 = 16 + 位数 * 9
+        if 新宽 != self.宽度:
+            self.宽度 = 新宽
+            self.setFixedWidth(新宽)
+            return True
+        return False
 
     def sizeHint(self):
         return QSize(self.宽度, 0)
@@ -112,8 +123,18 @@ class 行号区(QWidget):
         编辑器 = self.编辑器
         块 = 编辑器.firstVisibleBlock()
         号 = 块.blockNumber() + 1
-        顶 = int(
-            编辑器.blockBoundingGeometry(块).translated(编辑器.contentOffset()).top()
+        # 关键：blockBoundingGeometry 的 y 是相对**视口**的，而行号区自身
+        # 有一个向下的偏移（contentsRect 的 padding-top）。不减掉这个偏移，
+        # 行号会整体偏下、和正文行对不齐 —— 上一版正是这里没扣，
+        # 导致第 2 行起正文压进了行号区，看起来「行首被吞了」。
+        自身偏移 = self.y()
+        顶 = (
+            int(
+                编辑器.blockBoundingGeometry(块)
+                .translated(编辑器.contentOffset())
+                .top()
+            )
+            - 自身偏移
         )
         行高 = 编辑器.fontMetrics().height()
 
@@ -149,6 +170,8 @@ class 编辑器(QPlainTextEdit):
         self.文件路径 = None
         self.已改 = False
         self.制表宽 = 4
+        # 输入法组字状态（由 inputMethodEvent 维护）
+        self._组字中 = False
 
         self.设置字体()
 
@@ -173,7 +196,8 @@ class 编辑器(QPlainTextEdit):
         self.cursorPositionChanged.connect(self._排队刷新界面)
 
         # 尊重主窗口的「显示行号」开关
-        if not getattr(主窗, "显示行号", True):
+        self._行号隐藏 = not getattr(主窗, "显示行号", True)
+        if self._行号隐藏:
             self.行号.setVisible(False)
         self._更新行号宽()
         self._当前行变化()
@@ -202,13 +226,38 @@ class 编辑器(QPlainTextEdit):
         self.高亮.重建()
         self.高亮.rehighlight()
         self.行号.update()
+        # 应用样式表会重置 viewportMargins，必须重设，否则文字会贴到最左边
+        self.重设行号边距()
         self._当前行变化()
 
     # —— 行号 ——
 
     def _更新行号宽(self, _=None):
-        左边距 = self.行号.宽度 if self.行号.isVisible() else 0
+        # 行数变多时把行号栏加宽，避免正文被挤在行号下面
+        try:
+            self.行号.按行号调整宽度(self.blockCount())
+        except (AttributeError, RuntimeError):
+            pass
+        # 用「是否被隐藏」判断，不能用 isVisible()：
+        # 编辑器还没显示到屏幕上时 isVisible() 是 False，会算出左边距 0，
+        # 结果正文贴着最左边画、和行号栏重叠（看起来就是「行首被吞」）。
+        左边距 = 0 if getattr(self, "_行号隐藏", False) else self.行号.宽度
         self.setViewportMargins(左边距, 0, 0, 0)
+
+    def 重设行号边距(self):
+        """样式表一改，Qt 会把 viewportMargins 重置掉，必须重新设一次。
+
+        现象：换主题后文字突然贴到最左边、和行号栏叠在一起，
+        看起来像每行开头被切掉了几个字（用户报的「每行吞字」）。
+        """
+        self._更新行号宽()
+        try:
+            区 = self.contentsRect()
+            self.行号.setGeometry(
+                QRect(区.left(), 区.top(), self.行号.宽度, 区.height())
+            )
+        except (AttributeError, RuntimeError):
+            pass
 
     def _更新行号区(self, 矩形, 滚动):
         if 滚动:
@@ -255,8 +304,19 @@ class 编辑器(QPlainTextEdit):
             任务.start(30)
 
     def _补记已改(self):
-        """延后执行的界面刷新：标题栏 ● 与状态栏行列。"""
+        """延后执行的界面刷新：标题栏 ● 与状态栏行列。
+
+        关键：输入法正在组字时绝不刷窗口标题。
+        Windows 上 `setWindowTitle` 会取消 IME 组字 —— 用户飞快打拼音、
+        组字还没上屏时，定时器一改标题，正在输入的组字就被取消了，
+        表现就是「每行都会吞字」。组字中就把这次刷新推迟再来。
+        """
         if getattr(self, "_载入中", False):
+            return
+        if self._输入法组字中():
+            任务 = getattr(self, "_界面刷新任务", None)
+            if 任务 is not None:
+                任务.start(120)
             return
         if self.主窗.当前 is self:
             self.主窗._刷新标题()
@@ -307,14 +367,22 @@ class 编辑器(QPlainTextEdit):
 
     # —— 键盘行为 ——
 
+    def inputMethodEvent(self, 事件):
+        """跟踪输入法组字状态。
+
+        之前用 `QGuiApplication.inputMethod().isVisible()` 判断，但那个接口
+        在 Windows 上并不可靠（实测始终 False），导致「输入法组字中要放行」
+        的守卫从未生效：用户打拼音时按到 `'` `"` 被自动配对截走，
+        输入法收不到按键，正在组的那段就没了 —— 就是「吞字」。
+        这里自己记账：有 preedit 就是组字中，提交或清空就结束。
+        """
+        预编辑 = 事件.preeditString() if 事件 is not None else ""
+        self._组字中 = bool(预编辑)
+        super().inputMethodEvent(事件)
+
     def _输入法组字中(self):
-        """输入法候选窗是否正开着（正在组字/联想）。异常一律当作没开。"""
-        try:
-            from PySide6.QtGui import QGuiApplication
-            法 = QGuiApplication.inputMethod()
-            return bool(法 and 法.isVisible())
-        except Exception:
-            return False
+        """是否正在用输入法组字（自己记账，不依赖平台接口）。"""
+        return bool(getattr(self, "_组字中", False))
 
     配对表 = {
         "(": ")", "[": "]", "{": "}", "'": "'", '"': '"',
@@ -338,11 +406,17 @@ class 编辑器(QPlainTextEdit):
         # 中文输入法正在组字时一律让路：IME 用 ' 和 " 触发中文标点，
         # 若这里抢先生成一对英文引号并 return，输入法就收不到这次按键，
         # 用户会觉得「标点被吞了、打不出来」。
-        if 文本 in self.配对表 and not 事件.modifiers() and not self._输入法组字中():
+        组字中 = self._输入法组字中()
+        if 文本 in self.配对表 and not 事件.modifiers() and not 组字中:
             self._自动配对(文本, self.配对表[文本])
             return
+        if 组字中 and 文本 in self.配对表:
+            # 组字期间这类按键交给输入法决定（它会把 ' 变成 ’ 之类），
+            # 自己不能再插一个字符，否则上屏后多出个引号。
+            事件.accept()
+            return
         # 输入右括号时，若紧邻的正是它，直接跳过（不重复插入）
-        if 文本 and 文本 in self.配对表.values() and not self._输入法组字中():
+        if 文本 and 文本 in self.配对表.values() and not 组字中:
             游 = self.textCursor()
             if not 游.hasSelection() and 游.block().text()[游.positionInBlock():游.positionInBlock() + 1] == 文本:
                 游.movePosition(QTextCursor.Right)
@@ -406,14 +480,16 @@ class 编辑器(QPlainTextEdit):
         self.setTextCursor(游)
 
     def _自动缩进(self, 事件):
-        """回车时保持缩进；若上一行以冒号结尾再缩进一级。"""
+        """回车时保持缩进；若上一行以冒号结尾再缩进一级。
+
+        实测 QPlainTextEdit 的原生回车**不会**继承上一行缩进（第 2 行是空的），
+        所以要自己补完整的缩进量，而不是只补差额。
+        """
         光标 = self.textCursor()
         行文 = 光标.block().text()[: 光标.positionInBlock()]
         缩进 = len(行文) - len(行文.lstrip())
         额外 = self.制表宽 if 行文.rstrip().endswith(("：", ":")) else 0
         空格 = " " * (缩进 + 额外)
-        # 先让 QPlainTextEdit 处理回车，再在「新光标位置」插入缩进。
-        # 直接 insertPlainText 有时会插到旧位置，所以显式用 textCursor 插入。
         super().keyPressEvent(事件)
         if 空格:
             游 = self.textCursor()

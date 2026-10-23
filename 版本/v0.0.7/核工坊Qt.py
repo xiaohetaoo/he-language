@@ -83,7 +83,27 @@ class 顶行(QWidget):
         标 = QLabel()
         标.setObjectName("brandMark")
         self.品牌 = 标
+        标.setToolTip("核工坊")
+        # 用大图让 Qt 自己平滑缩放。
+        # 用大图让 Qt 自己平滑缩放。
+        # 千万不能用 核图标_32.png 这种预缩好的小图：32px 版本只有 3% 的
+        # 不透明像素、16px 版本是 0% —— 细轨道线在预缩时被抹掉了，
+        # 画上去几乎是空的，看起来像图标丢了。
+        # 26px 是顶栏高度 44 下仍能看清原子轨道与彩色立方体的最小尺寸。
+        尺寸 = 26
+        self._品牌图 = 缩放品牌图(尺寸)
+        if self._品牌图 is not None:
+            标.setPixmap(self._品牌图)
         布局.addWidget(标)
+
+        # 标志后面跟「核工坊」字样 —— 这是用户明确要求保留的，别改
+        self.品牌字 = QLabel("核工坊")
+        self.品牌字.setObjectName("品牌字")
+        self.品牌字.setCursor(Qt.PointingHandCursor)
+        self.品牌字.setToolTip("核工坊 v%s" % 核.版本)
+        self.品牌字.mousePressEvent = lambda e: 主窗.弹主菜单(self.品牌字)
+        布局.addWidget(self.品牌字)
+        布局.addSpacing(8)
 
         self.菜单钮 = QLabel("☰")
         self.菜单钮.setObjectName("menuBtn")
@@ -137,16 +157,9 @@ class 顶行(QWidget):
         self.关闭.mousePressEvent = lambda e: 主窗.退出()
 
     def 刷新图标(self, 主题表=None):
-        """按当前主题重画品牌标记与运行三角。
-
-        教训：运行三角原先写死 #1E1F22（等于深色主题的编辑器底色），
-        叠在顶栏 #2B2D30 上对比度只有 1.13 —— 深色主题下这个按钮
-        等于隐形。图标颜色必须跟主题走。
-        """
+        """重画顶行的运行三角。品牌标记用原图，不在这里改。"""
         表 = 主题表 or {}
-        标色 = 表.get("图标项目", "#3574F0")
         运色 = 表.get("图标运行", "#4CAF6E")
-        self.品牌.setPixmap(画图标("原子", 标色, 20))
         self.运行钮.setPixmap(画图标("三角", 运色, 14))
 
     def 切最大化(self):
@@ -183,6 +196,26 @@ class 顶行(QWidget):
     def mouseDoubleClickEvent(self, 事件):
         self.切最大化()
         super().mouseDoubleClickEvent(事件)
+
+
+def 缩放品牌图(边长):
+    """把工作室标志（原子 + 彩色立方体）按目标边长平滑缩放。
+
+    直接用最原始的大图（图标PNG，530x470），绝不用 素材/核图标_16/24/32.png
+    这类预缩小图：实测 32px 版只有 3% 不透明像素、16px 版是 0%，
+    细轨道线在预缩阶段就被抹平了，贴上去几乎是空白。
+    """
+    源 = 图标路径("核图标.png")
+    if not os.path.exists(源):
+        源 = 图标路径("核图标_256.png")
+    if not os.path.exists(源):
+        return None
+    原 = QPixmap(源)
+    if 原.isNull():
+        return None
+    return 原.scaled(
+        边长, 边长, Qt.KeepAspectRatio, Qt.SmoothTransformation
+    )
 
 
 def 画图标(形状, 颜色, 大小=18):
@@ -1103,6 +1136,7 @@ class 主窗(QMainWindow):
     def 切换行号(self):
         self.显示行号 = not self.显示行号
         for d in self.文档集:
+            d._行号隐藏 = not self.显示行号
             d.行号.setVisible(self.显示行号)
             d._更新行号宽()
         self.状态("行号已%s" % ("显示" if self.显示行号 else "隐藏"))
@@ -1497,7 +1531,13 @@ class 主窗(QMainWindow):
     def _刷新标题(self):
         名 = self._文件名(self.当前) if self.当前 else ""
         点 = " ●" if (self.当前 and self.当前.已改) else ""
-        self.setWindowTitle("核工坊 v%s — %s%s" % (核.版本, 名 or "未打开文件", 点))
+        完整 = "核工坊 v%s — %s%s" % (核.版本, 名 or "未打开文件", 点)
+        # 标题没变就别碰 setWindowTitle：Windows 上这会把 IME 正在组字的
+        # 拼音取消掉，飞快打字时会丢字（用户报的「每行吞字」）。
+        改标题 = getattr(self, "_标题缓存", None) != 完整
+        if 改标题:
+            self._标题缓存 = 完整
+            self.setWindowTitle(完整)
         self.顶行.设项目名(os.path.basename(self.项目目录) or "核语言")
         if self.当前 and self.当前.文件路径:
             父 = os.path.basename(os.path.dirname(self.当前.文件路径))
