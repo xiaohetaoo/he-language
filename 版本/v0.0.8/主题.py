@@ -139,13 +139,18 @@ QToolTip {
 /* 外框（圆角无边框窗口）。
    最大化时必须把圆角去掉：#rootFrame 的四角会被切掉一小块，
    屏幕四角因此露出桌面/阴影，看起来就像「全屏没占满」。
-   主窗._应用窗口外观() 通过设置 maximized 属性切换下面这条规则。 */
+   主窗._应用窗口外观() 通过设置 maximized 属性切换下面这条规则。
+
+   注意：属性名不能叫 maximized —— 那是 QWidget 的内建只读属性，
+   setProperty("maximized", ...) 会被直接吞掉（读回来永远是 False，
+   dynamicPropertyNames 里也看不到），这条规则就永远不会匹配。
+   用 窗态 这个名字，中文名不会被内建属性占用。 */
 #rootFrame {
     background: __窗口__;
     border: 1px solid __边框__;
     border-radius: 12px;
 }
-#rootFrame[maximized="true"] {
+#rootFrame[窗态="最大化"] {
     border-radius: 0px;
 }
 

@@ -360,8 +360,32 @@ def 主():
     _角色 = {_图.pixelColor(x, y).name().lower() for x, y in
              ((0, 0), (_w - 1, 0), (0, _h - 1), (_w - 1, _h - 1))}
     检查(_角色 == {_底}, "最大化四角都是窗口底色 %s（实际 %s）" % (_底, _角色))
+    # grab() 的总会把圆角区填成底色，上面那条恒真、没有检测力。
+    # 真正有用的是这两条：QSS 属性必须真的存住（否则规则永远不匹配），
+    # 以及最大化时 DWM 必须收到「不圆角」。
+    检查(_窗.外框.property("窗态") == "最大化",
+         "最大化时 QSS 属性 窗态=最大化（实际 %r）" % _窗.外框.property("窗态"))
+    # 属性名必须避开 QWidget 内建属性：用 "maximized" 会被 setProperty
+    # 静默吞掉，读回来永远 False，QSS 规则从未匹配过。
+    检查(_窗.外框.property("maximized") is False,
+         "内建属性 maximized 不可用于自定义状态（记录这个坑）")
+    try:
+        import ctypes
+        import ctypes.wintypes as _wt
+
+        _dwm = ctypes.WinDLL("dwmapi")
+        _v = _wt.DWORD()
+        _dwm.DwmGetWindowAttribute(int(_窗.winId()), 33, ctypes.byref(_v),
+                                  ctypes.sizeof(_v))
+        检查(_v.value == 1, "最大化时 DWM 圆角偏好=1 不圆角（实际 %d）" % _v.value)
+    except Exception as _e:  # noqa: BLE001
+        print("  (跳过 DWM 检查：%s)" % _e)
     _窗.showNormal()
     应用.processEvents()
+    for _ in range(8):
+        应用.processEvents()
+    检查(_窗.外框.property("窗态") == "已还原",
+         "还原后 QSS 属性 窗态=已还原（实际 %r）" % _窗.外框.property("窗态"))
 
     print("[设置即时生效、无需重启]")
     # 用户报「设置应用不能马上生效，必须重启软件」。

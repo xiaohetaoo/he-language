@@ -1628,6 +1628,16 @@ class 主窗(QMainWindow):
         else:
             self.屑.setText("  ")
 
+    def _看起来最大化(self):
+        """是否处于最大化/全屏。
+
+        用 isMaximized() 而不是比对几何：无边框窗口在 Windows 上
+        geometry() 往往比 availableGeometry() 少一圈（DWM 边框被裁掉），
+        两者永远不相等，导致状态永远判成「未最大化」（实测圆角偏好
+        被写反：最大化时写成 DO NOT ROUND 的反面）。
+        """
+        return bool(self.isMaximized() or self.isFullScreen())
+
     def _应用窗口外观(self):
         """深色标题栏 + 圆角。最大化时要反向操作，否则屏幕四角露桌面。
 
@@ -1635,14 +1645,28 @@ class 主窗(QMainWindow):
         （误差 0 像素），缺的就是四个角 —— #rootFrame 的 border-radius 12px
         在最大化时仍然生效，加上 DWM 的圆角偏好，四角被切掉，
         露出后面的桌面/阴影，看起来就像窗口小了一圈。
+
+        注意：changeEvent(WindowStateChange) 触发时 Qt 内部的窗口状态
+        可能还没完全切换，直接读 isMaximized() 会拿到旧值
+        （实测在最大化事件里读到 True，属性却仍被写成 false）。
+        所以这里用「窗口几何是否等于屏幕可用区」来判定，
+        这个值在事件到达时已经是新的。
         """
-        最大化 = bool(self.isMaximized())
+        最大化 = self._看起来最大化()
         if getattr(self, "外框", None) is not None:
             # 最大化：圆角归零；还原：恢复 12px。交给 QSS 属性选择器，
             # 不用手写 setStyleSheet（那会把整个主题样式覆盖掉）。
-            self.外框.setProperty("maximized", "true" if 最大化 else "false")
-            self.外框.style().unpolish(self.外框)
-            self.外框.style().polish(self.外框)
+            #
+            # 属性名必须避开 QWidget 的内建属性：一开始用 "maximized"，
+            # setProperty 被静默忽略（读回来永远是 False、
+            # dynamicPropertyNames 里也没有），QSS 规则从未匹配过。
+            # 换成 "窗态" 这种自造名字才存得住。
+            新值 = "最大化" if 最大化 else "已还原"
+            if self.外框.property("窗态") != 新值:
+                self.外框.setProperty("窗态", 新值)
+                self.外框.style().unpolish(self.外框)
+                self.外框.style().polish(self.外框)
+                self.外框.update()
         try:
             import ctypes
 
@@ -1658,12 +1682,21 @@ class 主窗(QMainWindow):
             pass
 
     def changeEvent(self, 事件):
-        """最大化/还原时重算圆角。"""
+        """最大化/还原时重算圆角与 DWM 圆角偏好。
+
+        `_应用窗口外观()` 连调两次：
+          · 第一次立即调 —— DWM 属性对窗口状态最敏感，必须当场改，
+            否则会看到「先圆角、后跳成直角」的闪一下；
+          · 第二次用 QTimer.singleShot(0) 排到事件队列末尾 ——
+            此时 Qt 的窗口状态才算真正切换完，
+            属性选择器（QSS 圆角）必须在这之后才能拿到正确值。
+        """
         super().changeEvent(事件)
-        from PySide6.QtCore import QEvent
+        from PySide6.QtCore import QEvent, QTimer
 
         if 事件.type() == QEvent.WindowStateChange:
             self._应用窗口外观()
+            QTimer.singleShot(0, self._应用窗口外观)
 
     # —— 无边框窗口的边缘缩放 ——
 
