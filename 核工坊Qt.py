@@ -82,9 +82,7 @@ class 顶行(QWidget):
 
         标 = QLabel()
         标.setObjectName("brandMark")
-        图 = QPixmap(图标路径("核图标_32.png"))
-        if not 图.isNull():
-            标.setPixmap(图.scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.品牌 = 标
         布局.addWidget(标)
 
         self.菜单钮 = QLabel("☰")
@@ -115,7 +113,6 @@ class 顶行(QWidget):
         self.运行钮.setCursor(Qt.PointingHandCursor)
         self.运行钮.setToolTip("运行（F5）")
         self.运行钮.setAlignment(Qt.AlignCenter)
-        self.运行钮.setPixmap(画图标("三角", "#1E1F22", 14))
         self.运行钮.setFixedWidth(30)
         self.运行钮.mousePressEvent = lambda e: 主窗.运行()
         布局.addWidget(self.运行钮)
@@ -138,6 +135,19 @@ class 顶行(QWidget):
         self.最小化.mousePressEvent = lambda e: 主窗.showMinimized()
         self.最大化.mousePressEvent = lambda e: self.切最大化()
         self.关闭.mousePressEvent = lambda e: 主窗.退出()
+
+    def 刷新图标(self, 主题表=None):
+        """按当前主题重画品牌标记与运行三角。
+
+        教训：运行三角原先写死 #1E1F22（等于深色主题的编辑器底色），
+        叠在顶栏 #2B2D30 上对比度只有 1.13 —— 深色主题下这个按钮
+        等于隐形。图标颜色必须跟主题走。
+        """
+        表 = 主题表 or {}
+        标色 = 表.get("图标项目", "#3574F0")
+        运色 = 表.get("图标运行", "#4CAF6E")
+        self.品牌.setPixmap(画图标("原子", 标色, 20))
+        self.运行钮.setPixmap(画图标("三角", 运色, 14))
 
     def 切最大化(self):
         if self.主窗.isMaximized():
@@ -230,6 +240,22 @@ def 画图标(形状, 颜色, 大小=18):
         画.setBrush(QBrush(色))
         画.drawPolygon(QPolygonF([点(6.0, 4.0), 点(14.5, 9.0), 点(6.0, 14.0)]))
 
+    elif 形状 == "终端":
+        # 运行窗口（控制台面板）的开关。
+        # 以前这里也用播放三角，和顶行「运行」按钮的三角撞脸，分不出哪个是
+        # 执行、哪个只是开面板；改成终端窗口造型，一眼能区分。
+        画.setPen(QPen(色, 1.5 * 单位))
+        画.setBrush(Qt.NoBrush)
+        画.drawRoundedRect(QRectF(点(2.0, 3.5), 点(16.0, 14.5)), 1.8 * 单位, 1.8 * 单位)
+        画.setPen(QPen(色, 1.6 * 单位, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        路 = QPainterPath()
+        路.moveTo(点(5.0, 7.2))
+        路.lineTo(点(7.4, 9.0))
+        路.lineTo(点(5.0, 10.8))
+        画.drawPath(路)
+        画.setPen(QPen(色, 1.6 * 单位, Qt.SolidLine, Qt.RoundCap))
+        画.drawLine(点(9.2, 11.0), 点(13.0, 11.0))
+
     elif 形状 == "齿轮":
         画.setPen(QPen(色, 1.7 * 单位))
         画.setBrush(Qt.NoBrush)
@@ -244,6 +270,23 @@ def 画图标(形状, 颜色, 大小=18):
         画.setPen(Qt.NoPen)
         画.setBrush(QBrush(色))
         画.drawEllipse(点(9.0, 9.0), 4.0 * 单位, 4.0 * 单位)
+
+    elif 形状 == "原子":
+        # 品牌标记：用矢量画原子（两条交叉轨道 + 原子核）。
+        # 原先用 素材/核图标_32.png 缩到 20px，但那张图本身 97% 是透明像素
+        # （细轨道线在高分辨率下描边），缩到 20px 后几乎什么都没画上，
+        # 在深色底上等于看不见。改成矢量后任何尺寸都清楚，且随主题换色。
+        画.setPen(QPen(色, 1.6 * 单位))
+        画.setBrush(Qt.NoBrush)
+        画.save()
+        画.translate(点(9.0, 9.0))
+        画.drawEllipse(QPointF(0, 0), 7.0 * 单位, 3.0 * 单位)
+        画.rotate(60)
+        画.drawEllipse(QPointF(0, 0), 7.0 * 单位, 3.0 * 单位)
+        画.restore()
+        画.setPen(Qt.NoPen)
+        画.setBrush(QBrush(色))
+        画.drawEllipse(点(9.0, 9.0), 2.3 * 单位, 2.3 * 单位)
 
     画.end()
     return 图.scaled(大小, 大小, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -262,20 +305,21 @@ class 左竖条(QWidget):
         布局.setContentsMargins(6, 8, 6, 8)
         布局.setSpacing(6)
 
-        # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别
+        # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别。
+        # 颜色不写死，改成主题表里的键，主题一换整体重画。
         self.钮们 = {}
-        for 键, 形状, 颜色, 提示, 命令 in (
-            ("项目", "文件夹", "#6C9EF8", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
-            ("结构", "列表", "#B58EF8", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
-            ("运行", "三角", "#4CAF6E", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
-        ):
+        self._图标表 = [
+            ("项目", "文件夹", "图标项目", "项目栏（Ctrl+1）", lambda: 主窗.切换项目栏()),
+            ("结构", "列表", "图标结构", "语法对照表（Ctrl+2）", lambda: 主窗.切换对照表()),
+            ("运行", "终端", "图标运行", "运行窗口（Ctrl+3）", lambda: 主窗.切换运行窗()),
+        ]
+        for 键, 形状, 色键, 提示, 命令 in self._图标表:
             钮 = QLabel()
             钮.setObjectName("railBtn")
             钮.setAlignment(Qt.AlignCenter)
             钮.setFixedSize(32, 32)
             钮.setCursor(Qt.PointingHandCursor)
             钮.setToolTip(提示)
-            钮.setPixmap(画图标(形状, 颜色))
             钮.mousePressEvent = lambda e, c=命令: c()
             布局.addWidget(钮)
             self.钮们[键] = 钮
@@ -289,7 +333,6 @@ class 左竖条(QWidget):
         设.setFixedSize(32, 32)
         设.setCursor(Qt.PointingHandCursor)
         设.setToolTip("设置（Ctrl+,）")
-        设.setPixmap(画图标("齿轮", "#9DA0A8"))
         设.mousePressEvent = lambda e: 主窗.打开设置()
         布局.addWidget(设)
         self.钮们["设置"] = 设
@@ -299,8 +342,20 @@ class 左竖条(QWidget):
         self.状态点.setAlignment(Qt.AlignCenter)
         self.状态点.setFixedSize(32, 32)
         self.状态点.setToolTip("运行状态")
-        self.状态点.setPixmap(画图标("圆点", "#6AAB73"))
         布局.addWidget(self.状态点)
+
+        self.刷新图标()
+
+    def 刷新图标(self, 主题表=None):
+        """按当前主题重画竖条图标。"""
+        表 = 主题表 or getattr(self.主窗, "主题", {}) or {}
+        取 = lambda 键, 备: 表.get(键, 备)
+        形状表 = {键: 形状 for 键, 形状, _, _, _ in self._图标表}
+        self.钮们["项目"].setPixmap(画图标(形状表["项目"], 取("图标项目", "#3574F0")))
+        self.钮们["结构"].setPixmap(画图标(形状表["结构"], 取("图标结构", "#B58EF8")))
+        self.钮们["运行"].setPixmap(画图标(形状表["运行"], 取("图标运行", "#4CAF6E")))
+        self.钮们["设置"].setPixmap(画图标("齿轮", 取("图标设置", "#9DA0A8")))
+        self.状态点.setPixmap(画图标("圆点", 取("图标状态点", "#6AAB73")))
 
 
 class 主窗(QMainWindow):
@@ -338,6 +393,7 @@ class 主窗(QMainWindow):
         self._绑快捷键()
         主题.换主题(self, self.主题, self.字号)
         self._应用窗口外观()
+        self._刷新图标()
 
         self.装载项目树(self.项目目录)
         self.新建()
@@ -1281,11 +1337,22 @@ class 主窗(QMainWindow):
         self.主题名 = self.主题["名"]
         主题.换主题(self, self.主题, self.字号)
         self._应用窗口外观()
+        self._刷新图标()
         for d in self.文档集:
             d.换主题()
         self._填对照表()
         self.状态("已切换到%s主题" % self.主题["名"])
         self.存配置()
+
+    def _刷新图标(self):
+        """主题变了以后，把自绘图标按新配色重画一遍。"""
+        for 部件, 名 in ((getattr(self, "顶行", None), "顶行"), (getattr(self, "竖条", None), "竖条")):
+            if 部件 is None:
+                continue
+            try:
+                部件.刷新图标(self.主题)
+            except (AttributeError, RuntimeError):
+                pass
 
     def 打开设置(self):
         try:

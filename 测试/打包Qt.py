@@ -44,12 +44,29 @@ def 确保图标():
     return subprocess.run([找解释器(), 生成], cwd=根目录).returncode == 0
 
 
+def 跑回归():
+    """打包前把全部测试跑一遍，不过就别打包。"""
+    脚本 = os.path.join(根目录, "测试", "跑全部.py")
+    if not os.path.exists(脚本):
+        print("找不到回归测试脚本，跳过")
+        return True
+    print("\n先跑一遍全部回归测试…")
+    环境 = dict(os.environ)
+    环境["PYTHONIOENCODING"] = "utf-8"
+    结果 = subprocess.run([找解释器(), 脚本], cwd=根目录, env=环境)
+    return 结果.returncode == 0
+
+
 def 主():
     参数 = sys.argv[1:]
     单文件 = "--目录" not in 参数
     控制台 = "--控制台" in 参数
 
     if not 确保图标():
+        return 1
+
+    if "--跳过测试" not in 参数 and not 跑回归():
+        print("\n回归测试没过，已停止打包。")
         return 1
 
     # Qt 版入口：一个极小的启动文件，把参数转给 核工坊Qt

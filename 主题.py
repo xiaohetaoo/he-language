@@ -41,13 +41,23 @@
     "函数名": "#56A8F5",
     # 交互
     "强调": "#3574F0",
+    # 实心按钮/菜单选中项：底色要比「强调」再深一点，白字才能到 4.5
+    "按钮底": "#2F6AE0",
+    "按钮热": "#3570E4",
     "悬停": "#393B40",
     "按下": "#43454A",
     "选中行": "#2E436E",
-    "错误": "#F75464",
+    "错误": "#FF6B7A",
     "警告": "#D5B778",
     "成功": "#6AAB73",
     "关闭红": "#C42B1C",
+    # 图标：每个功能一个颜色。这里的取值都验算过，
+    # 保证在各自的底色（窗口/悬停）上对比度 ≥ 3.0（WCAG 非文本对比）。
+    "图标项目": "#6C9EF8",
+    "图标结构": "#B58EF8",
+    "图标运行": "#4CAF6E",
+    "图标设置": "#9AA0AB",
+    "图标状态点": "#6AAB73",
     # 控制台
     "控制台底": "#1E1F22",
     "控制台字": "#BCBEC4",
@@ -69,7 +79,7 @@
     "次要文本": "#5F6672",
     "禁用文本": "#9AA0A8",
     "行号底": "#F7F8FA",
-    "行号字": "#6E747D",
+    "行号字": "#676D76",
     "当前行": "#F2F6FC",
     "选区": "#CFE2FF",
     "光标": "#1F2329",
@@ -81,6 +91,8 @@
     "内置": "#8A6D00",
     "函数名": "#005FAB",
     "强调": "#3574F0",
+    "按钮底": "#2F6AE0",
+    "按钮热": "#3570E4",
     "悬停": "#E6E9ED",
     "按下": "#D8DCE2",
     "选中行": "#D5E5FF",
@@ -88,6 +100,12 @@
     "警告": "#8A6D00",
     "成功": "#067D17",
     "关闭红": "#C42B1C",
+    # 图标：浅色底上必须用更深的同色系，否则亮蓝亮绿会糊在白底上
+    "图标项目": "#2F6FD0",
+    "图标结构": "#7B4FD0",
+    "图标运行": "#2E8B57",
+    "图标设置": "#5F6672",
+    "图标状态点": "#067D17",
     "控制台底": "#FFFFFF",
     "控制台字": "#3A3F45",
 }
@@ -246,28 +264,28 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: t
 
 /* 左侧竖条 */
 #leftRail {
-    background: {窗口}; border-right: 1px solid {边框};
+    background: __窗口__; border-right: 1px solid __边框__;
 }
 #railBtn {
-    color: {次要文本}; background: transparent;
+    color: __次要文本__; background: transparent;
     font-size: 16px; border-radius: 8px;
 }
-#railBtn:hover { background: {悬停}; color: {文本}; }
-#railBtn:checked { background: {悬停}; color: {强调}; }
+#railBtn:hover { background: __悬停__; color: __文本__; }
+#railBtn:checked { background: __悬停__; color: __强调__; }
 
 /* 顶部单行（新 UI 合并式） */
-#topRow { background: {窗口}; border-bottom: 1px solid {边框}; }
-#projectName { color: {文本}; font-size: 13px; background: transparent; }
+#topRow { background: __窗口__; border-bottom: 1px solid __边框__; }
+#projectName { color: __文本__; font-size: 13px; background: transparent; }
 #topBtn {
-    color: {文本}; background: transparent;
+    color: __文本__; background: transparent;
     padding: 5px 10px; border-radius: 6px; font-size: 13px;
 }
-#topBtn:hover { background: {悬停}; }
+#topBtn:hover { background: __悬停__; color: __文本__; }
 #runBtn {
-    color: {成功}; background: transparent;
+    color: __成功__; background: transparent;
     padding: 4px 8px; border-radius: 6px; font-size: 15px;
 }
-#runBtn:hover { background: {悬停}; }
+#runBtn:hover { background: __悬停__; }
 
 /* 状态栏 */
 #statusBar { background: __面板__; border-top: 1px solid __边框__; }
@@ -279,7 +297,7 @@ QMenu {
     border: 1px solid __边框__; border-radius: 8px; padding: 6px;
 }
 QMenu::item { padding: 7px 28px 7px 18px; border-radius: 5px; }
-QMenu::item:selected { background: __强调__; color: #FFFFFF; }
+QMenu::item:selected { background: __按钮底__; color: #FFFFFF; }
 QMenu::separator { height: 1px; background: __边框__; margin: 5px 10px; }
 
 /* 对话框 */
@@ -294,8 +312,8 @@ QPushButton {
     border: none; border-radius: 6px; padding: 7px 18px; font-size: 13px;
 }
 QPushButton:hover { background: __按下__; }
-QPushButton:default { background: __强调__; color: #FFFFFF; }
-QPushButton:default:hover { background: #4A88DA; }
+QPushButton:default { background: __按钮底__; color: #FFFFFF; }
+QPushButton:default:hover { background: __按钮热__; }
 QCheckBox { color: __文本__; spacing: 8px; background: transparent; }
 QCheckBox::indicator {
     width: 16px; height: 16px;
@@ -333,6 +351,14 @@ def 生成样式(主题=None, 字号=12):
     数据["界面字体"] = 界面字体
     数据["字号"] = str(字号)
     文本 = _QSS
+    # 保险：模板里若混进了 `{中文名}` 这种单花括号写法（CSS 的块花括号
+    # 里永远是选择器和声明，绝不会只有纯中文），先统一成 `__中文名__`。
+    # 教训：曾经有 12 处用了 `{窗口}` 这类写法，替换逻辑只认 `__窗口__`，
+    # 于是这些声明原样留在 QSS 里被 Qt 判为非法值而整条丢弃 ——
+    # 顶栏、左侧竖条、运行按钮因此一直没有样式，表现为「图标和文字看不清」。
+    import re as _re0
+
+    文本 = _re0.sub(r"\{([\u4e00-\u9fff]+)\}", r"__\1__", 文本)
     # 长的键先替换，避免 __窗口__ 被 __窗__ 之类误伤
     for 键 in sorted(数据, key=len, reverse=True):
         文本 = 文本.replace("__%s__" % 键, str(数据[键]))
@@ -341,6 +367,12 @@ def 生成样式(主题=None, 字号=12):
     import re as _re
 
     文本 = _re.sub(r"/\*.*?\*/", "", 文本, flags=_re.S)
+    # 兜底校验：不该再有残留占位符。
+    # 注意别把 CSS 的块花括号当占位符 —— 只有「花括号里全是中文」
+    # 或者「还剩 __某某__」才是真的没替换掉。
+    残留 = _re.findall(r"\{[\u4e00-\u9fff]+\}", 文本) + _re.findall(r"__[^_\s{};]+__", 文本)
+    if 残留:
+        raise ValueError("QSS 模板有没被替换的占位符：%r" % 残留[:3])
     return 文本
 
 

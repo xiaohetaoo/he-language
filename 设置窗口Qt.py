@@ -132,9 +132,18 @@ class 设置对话框(QDialog):
         布局.addWidget(self._分组("字号"))
         行2 = QHBoxLayout()
         self.字号框 = QComboBox()
-        for n in (9, 10, 11, 12, 13, 14, 16, 18, 20, 22):
+        # 必须把「改字号」实际能达到的每个值都列全（那边是 9~22 逐个加减），
+        # 否则当前值不在列表里时 findData 返回 -1、下拉框显示成 9 pt，
+        # 用户一按确定字号就被悄悄改回 9。
+        可选 = list(range(9, 23))
+        当前 = int(self.主窗.字号)
+        if 当前 not in 可选:
+            可选.append(当前)
+            可选.sort()
+        for n in 可选:
             self.字号框.addItem("%d pt" % n, n)
-        self.字号框.setCurrentIndex(max(0, self.字号框.findData(self.主窗.字号)))
+        位置 = self.字号框.findData(当前)
+        self.字号框.setCurrentIndex(位置 if 位置 >= 0 else 0)
         self.字号框.currentIndexChanged.connect(self._换字号)
         行2.addWidget(self.字号框)
         行2.addStretch(1)
@@ -164,9 +173,16 @@ class 设置对话框(QDialog):
         行 = QHBoxLayout()
         行.addWidget(QLabel("每级缩进空格数"))
         self.缩进框 = QComboBox()
-        for n in (2, 4, 8):
+        # 同上：当前值必须能在下拉框里找到，否则一按确定就被改成列表首项
+        可缩 = [2, 4, 8]
+        当前缩 = int(self.主窗.制表宽)
+        if 当前缩 not in 可缩:
+            可缩.append(当前缩)
+            可缩.sort()
+        for n in 可缩:
             self.缩进框.addItem("%d 空格" % n, n)
-        self.缩进框.setCurrentIndex(max(0, self.缩进框.findData(self.主窗.制表宽)))
+        位缩 = self.缩进框.findData(当前缩)
+        self.缩进框.setCurrentIndex(位缩 if 位缩 >= 0 else 0)
         self.缩进框.currentIndexChanged.connect(self._换制表宽)
         行.addWidget(self.缩进框)
         行.addStretch(1)
