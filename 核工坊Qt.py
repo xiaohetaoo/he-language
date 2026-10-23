@@ -572,8 +572,77 @@ class 主窗(QMainWindow):
             ("Ctrl+1", self.切换项目栏),
             ("Ctrl+2", self.切换对照表),
             ("Ctrl+3", self.切换运行窗),
+            ("Ctrl+Tab", lambda: self._轮换标签(1)),
+            ("Ctrl+Shift+Tab", lambda: self._轮换标签(-1)),
+            ("F2", self.重命名当前),
+            ("Ctrl+Shift+F", self.在项目中查找),
         ):
             QShortcut(QKeySequence(键), self).activated.connect(动作)
+
+    def _轮换标签(self, 方向):
+        """Ctrl+Tab 在标签间循环切换。"""
+        if self.标签栏.count() < 2:
+            return
+        当前 = self.标签栏.currentIndex()
+        新 = (当前 + 方向) % self.标签栏.count()
+        self.标签栏.setCurrentIndex(新)
+
+    def 重命名当前(self):
+        """F2 重命名当前文件（另存为新名字后替换旧标签）。"""
+        if self.当前 is None or not self.当前.文件路径:
+            self.状态("先保存文件再重命名")
+            return
+        from PySide6.QtWidgets import QInputDialog
+
+        旧名 = os.path.basename(self.当前.文件路径)
+        新名, 确定 = QInputDialog.getText(self, "重命名", "新文件名：", text=旧名)
+        if not 确定 or not 新名 or 新名 == 旧名:
+            return
+        旧路径 = self.当前.文件路径
+        新路径 = os.path.join(os.path.dirname(旧路径), 新名)
+        try:
+            os.rename(旧路径, 新路径)
+        except OSError as e:
+            self.状态("重命名失败：%s" % e)
+            return
+        self.当前.文件路径 = 新路径
+        self.刷新标签(self.当前)
+        self._刷新标题()
+        self.状态("已重命名为 %s" % 新名)
+
+    def 在项目中查找(self):
+        """Ctrl+Shift+F：在项目所有 .xht 里搜索文字，结果列在控制台。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        词, 确定 = QInputDialog.getText(self, "在项目中查找", "要查找的文字：")
+        if not 确定 or not 词:
+            return
+        命中 = 0
+        self.清空控制台()
+        self.控制台.appendPlainText("在项目中查找：%s\n" % 词)
+        for 目录, 子目录, 文件 in os.walk(self.项目目录):
+            子目录[:] = [
+                d for d in 子目录
+                if not d.startswith(".") and d not in ("__pycache__", "build", "dist", "版本")
+            ]
+            for 名 in 文件:
+                if not 名.endswith(".xht"):
+                    continue
+                全 = os.path.join(目录, 名)
+                try:
+                    with open(全, encoding="utf-8", errors="replace") as f:
+                        行们 = f.readlines()
+                except OSError:
+                    continue
+                for 号, 行 in enumerate(行们, 1):
+                    if 词 in 行:
+                        命中 += 1
+                        相对 = os.path.relpath(全, self.项目目录)
+                        self.控制台.appendPlainText(
+                            "%s:%d:  %s" % (相对, 号, 行.rstrip())
+                        )
+        self.控制台.appendPlainText("\n共 %d 处" % 命中)
+        self.状态("项目内找到 %d 处" % 命中)
 
     # ================= 文档管理 =================
 
