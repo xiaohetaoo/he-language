@@ -133,7 +133,6 @@ class 顶行(QWidget):
         self.品牌 = 标
         标.setToolTip("核工坊")
         # 用大图让 Qt 自己平滑缩放。
-        # 用大图让 Qt 自己平滑缩放。
         # 千万不能用 核图标_32.png 这种预缩好的小图：32px 版本只有 3% 的
         # 不透明像素、16px 版本是 0% —— 细轨道线在预缩时被抹掉了，
         # 画上去几乎是空的，看起来像图标丢了。
@@ -1419,19 +1418,48 @@ class 主窗(QMainWindow):
             self.状态("没有打开的文档")
             return
         路径 = self.当前.文件路径 or os.path.join(self.项目目录, "未命名%s" % self.内核.扩展名)
-        报告 = self.内核.未定义报告(None)
+        # 未定义清单写到项目目录 —— 之前用 未定义报告(None)，
+        # 而 保存() 遇到 None 路径会直接返回，于是按 F9 永远看不到记录。
+        报告 = self.内核.未定义报告(
+            os.path.join(self.项目目录, self.内核.未定义文件名)
+        )
+        # 错误信息要送进运行窗口的控制台，不能写 sys.stderr ——
+        # GUI 里 stderr 没有去处，用户按 F9 只看到状态栏一句
+        # 「语法有误，见运行窗口」，却根本看不到任何报错详情。
+        import io
+
+        缓冲 = io.StringIO()
         try:
-            代码, _ = self.内核.编译源码(self.当前.取文本(), 路径, 报告)
+            代码, _ = self.内核.编译源码(self.当前.取文本(), 路径, 报告, 缓冲)
         finally:
             报告.保存()
-        self.状态("检查通过" if 代码 is not None else "语法有误，见运行窗口")
+        详情 = 缓冲.getvalue()
+        if 代码 is None:
+            self.控制台.appendPlainText(详情.rstrip("\n") if 详情 else "语法有误")
+            self.状态("语法有误，详情见运行窗口")
+        else:
+            if 详情.strip():
+                self.控制台.appendPlainText(详情.rstrip("\n"))
+            self.状态("检查通过")
 
     def 打开未定义清单(self):
-        路径 = os.path.join(self.项目目录, self.内核.未定义文件名)
-        if os.path.exists(路径):
-            self.打开(路径)
-        else:
-            self.状态("还没有未定义记录")
+        # 清单写在**运行的文件所在目录**（见 核.默认报告路径）。
+        # 当前文档在别的目录时，先看那个目录 —— 否则用户明明在
+        # 别的项目里跑过程序，这里却只显示项目目录下的那份。
+        候选 = []
+        if self.当前 and self.当前.文件路径:
+            候选.append(
+                os.path.join(
+                    os.path.dirname(os.path.abspath(self.当前.文件路径)),
+                    self.内核.未定义文件名,
+                )
+            )
+        候选.append(os.path.join(self.项目目录, self.内核.未定义文件名))
+        for 路径 in 候选:
+            if os.path.exists(路径):
+                self.打开(路径)
+                return
+        self.状态("还没有未定义记录")
 
     # ================= 视图与主题 =================
 
@@ -1564,6 +1592,20 @@ class 主窗(QMainWindow):
 
     # ================= 菜单 =================
 
+    @staticmethod
+    def _加动作(菜单, 文本, 命令, 提示=None):
+        """往菜单里加一个动作。
+
+        父对象必须是**菜单**而不是主窗：菜单用完就销毁，
+        挂在主窗上的动作不会被回收 —— 每开一次菜单就往主窗里堆
+        四十来个 QAction，反复点几次内存就 steadily 涨上去。
+        """
+        动作 = QAction(文本, 菜单)
+        if 提示:
+            动作.setToolTip(提示)
+        动作.triggered.connect(lambda _=False, c=命令: c())
+        return 动作
+
     def 弹主菜单(self, 锚):
         菜单 = QMenu(self)
         文件 = 菜单.addMenu("文件")
@@ -1577,20 +1619,17 @@ class 主窗(QMainWindow):
             ("关闭标签", self.关闭当前),
             ("退出", self.退出),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            文件.addAction(动作)
+            文件.addAction(self._加动作(文件, 名, 命令))
 
         最近 = 文件.addMenu("最近打开")
         for 路径 in self.最近[:10]:
             if not os.path.isfile(路径):
                 continue
-            动作 = QAction(os.path.basename(路径), self)
-            动作.setToolTip(路径)
-            动作.triggered.connect(lambda _=False, p=路径: self.打开(p))
-            最近.addAction(动作)
+            最近.addAction(
+                self._加动作(最近, os.path.basename(路径), lambda p=路径: self.打开(p), 路径)
+            )
         if not 最近.actions():
-            空 = QAction("（空）", self)
+            空 = QAction("（空）", 最近)
             空.setEnabled(False)
             最近.addAction(空)
         菜单.addSeparator()
@@ -1600,9 +1639,7 @@ class 主窗(QMainWindow):
             ("撤销", lambda: self.当前 and self.当前.undo()),
             ("重做", lambda: self.当前 and self.当前.redo()),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            编.addAction(动作)
+            编.addAction(self._加动作(编, 名, 命令))
         编.addSeparator()
         for 名, 命令 in (
             ("剪切", lambda: self.当前 and self.当前.cut()),
@@ -1610,18 +1647,14 @@ class 主窗(QMainWindow):
             ("粘贴", lambda: self.当前 and self.当前.paste()),
             ("全选", lambda: self.当前 and self.当前.selectAll()),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            编.addAction(动作)
+            编.addAction(self._加动作(编, 名, 命令))
         编.addSeparator()
         for 名, 命令 in (
             ("注释 / 取消注释", self.切换注释),
             ("查找 / 替换…", self.查找),
             ("转到行…", self.跳到行),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            编.addAction(动作)
+            编.addAction(self._加动作(编, 名, 命令))
         菜单.addSeparator()
 
         运 = 菜单.addMenu("运行")
@@ -1631,9 +1664,7 @@ class 主窗(QMainWindow):
             ("检查语法", self.检查语法),
             ("未定义清单", self.打开未定义清单),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            运.addAction(动作)
+            运.addAction(self._加动作(运, 名, 命令))
         菜单.addSeparator()
 
         视 = 菜单.addMenu("视图")
@@ -1648,25 +1679,23 @@ class 主窗(QMainWindow):
             ("增大字号", lambda: self.改字号(1)),
             ("减小字号", lambda: self.改字号(-1)),
         ):
-            动作 = QAction(名, self)
-            动作.triggered.connect(lambda _=False, c=命令: c())
-            视.addAction(动作)
+            视.addAction(self._加动作(视, 名, 命令))
         菜单.addSeparator()
 
-        设置 = QAction("设置…", self)
-        设置.triggered.connect(self.打开设置)
-        菜单.addAction(设置)
+        菜单.addAction(self._加动作(菜单, "设置…", self.打开设置))
         菜单.exec(锚.mapToGlobal(锚.rect().bottomLeft()))
+        # 菜单用完即弃：里面的 QAction 都以菜单为父对象，
+        # 菜单一销毁，它们跟着回收，不会在主窗里越堆越多。
+        菜单.deleteLater()
 
     def 弹出项目菜单(self, 锚):
         菜单 = QMenu(self)
-        动作 = QAction("切换项目文件夹…", self)
-        动作.triggered.connect(self.选择项目目录)
-        菜单.addAction(动作)
-        动作2 = QAction("刷新项目树", self)
-        动作2.triggered.connect(lambda: self.装载项目树(self.项目目录))
-        菜单.addAction(动作2)
+        菜单.addAction(self._加动作(菜单, "切换项目文件夹…", self.选择项目目录))
+        菜单.addAction(
+            self._加动作(菜单, "刷新项目树", lambda: self.装载项目树(self.项目目录))
+        )
         菜单.exec(锚.mapToGlobal(锚.rect().bottomLeft()))
+        菜单.deleteLater()
 
     def 选择项目目录(self):
         目录 = QFileDialog.getExistingDirectory(self, "选择项目文件夹", self.项目目录)

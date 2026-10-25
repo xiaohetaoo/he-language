@@ -63,7 +63,10 @@ class 高亮器(QSyntaxHighlighter):
                 f.setFontItalic(True)
             return f
 
-        关键字 = sorted(set(内核.关键词表) | {"核核"}, key=len, reverse=True)
+        # 注意：这里不把「核核」算进关键字 —— 它是注释引导词，
+        # 由 _标注释 单独染色。混进关键字表会被关键字规则先染一遍，
+        # 与注释色打架（而且判定口径还不一样）。
+        关键字 = sorted(set(内核.关键词表), key=len, reverse=True)
         内置 = sorted(
             set(内核.函数表) | set(内核.方法表), key=len, reverse=True
         )
@@ -73,8 +76,17 @@ class 高亮器(QSyntaxHighlighter):
                 词
             )
 
+        # 注释格式单独存：注释不走正则（见下面 _标注释 的说明），
+        # 但仍要用同一套配色，所以在这里建好放进 self.注释格式。
+        self.注释格式 = 格式(主题色["注释"], 斜体=True)
+
         self.规则 = [
-            (r"核核[^\n]*|#[^\n]*", 格式(主题色["注释"], 斜体=True)),
+            # 注释不在这里用正则匹配 —— 「核核」的判定必须与 核.py 翻译器
+            # **完全一致**，否则同一行会被染成注释色、却又被当成代码。
+            # 翻译器是逐位置扫描的（遇到不合法的「核核」会跳过继续找下一个），
+            # 而一条正则只能表达「任意位置匹配」，两者在
+            # 「核核abc 核核 def」这种行上必然打架。
+            # 所以注释改由 _标注释 单独处理，直接调用 核.词左界/词右界。
             (
                 r'核?"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'',
                 格式(主题色["字符串"]),
@@ -86,9 +98,43 @@ class 高亮器(QSyntaxHighlighter):
             (r"(?<=核类\s)[^\s(（:：]+", 格式(主题色["函数名"], 粗体=True)),
         ]
 
+    def _标注释(self, 文本, 格式):
+        """把注释染成注释色。
+
+        判定直接借用 核.py 的 词左界/词右界 —— 和翻译器用的是同一套规则，
+        不会再出现「高亮说是注释、翻译说是代码」的情况。
+
+        还要跳过字符串里的内容：字符串里的「核核」不是注释，
+        否则 核说('核核 在字符串里') 里的字会被染成注释色。
+        """
+        核 = self.主窗.内核
+        串区 = 核.字符串区间(文本)
+
+        def 在串里(位置):
+            return any(起 <= 位置 < 止 for 起, 止 in 串区)
+
+        i = 0
+        while True:
+            i = 文本.find("核核", i)
+            if i < 0:
+                break
+            合法 = 核.词左界(文本, i) and 核.词右界(文本, i + 2)
+            if 合法 and not 在串里(i):
+                self.setFormat(i, len(文本) - i, 格式)
+                return  # 注释到行尾，后面都是注释
+            i += 2
+        # 英文 # 注释（同样不能落在字符串里）
+        j = 文本.find("#")
+        while j >= 0:
+            if not 在串里(j):
+                self.setFormat(j, len(文本) - j, 格式)
+                return
+            j = 文本.find("#", j + 1)
+
     def highlightBlock(self, 文本):
         if not self.开:
             return
+        self._标注释(文本, self.注释格式)
         for 模式, 格式 in self.规则:
             for m in re.finditer(模式, 文本):
                 self.setFormat(m.start(), m.end() - m.start(), 格式)
@@ -284,7 +330,9 @@ class 编辑器(QPlainTextEdit):
         )
         self.设行号(getattr(主窗, "显示行号", True))
         self.设自动高亮(getattr(主窗, "自动高亮", True))
-        self._缩进线开 = bool(getattr(主窗, "显示缩进线", True))
+        # 缩进线要走 设缩进线()，它除了改属性还会调 viewport().update()。
+        # 只改属性的话，勾选框切换后要等下一次重绘才看得出变化。
+        self.设缩进线(getattr(主窗, "显示缩进线", True))
         self.update()
 
     # —— 设置项（改完立刻生效，不用重启）——
@@ -500,6 +548,23 @@ class 编辑器(QPlainTextEdit):
         # 若这里抢先生成一对英文引号并 return，输入法就收不到这次按键，
         # 用户会觉得「标点被吞了、打不出来」。
         组字中 = self._输入法组字中()
+        # 「右邻已经是配对的另一半」时直接跳过，不再插一对。
+        #
+        # 这一步必须排在自动配对**之前**，而且对引号同样适用。
+        # 以前引号不在这里处理：引号既是配对表的键又是值，
+        # 所以按 '"' 时先命中上面的自动配对分支、插出一对 ""，
+        # 用户再按 '"' 收尾时又插一对 —— 打 核说("中文") 出来是
+        # 核说("中文")"")，凭空多三个字符。
+        if 文本 and 文本 in self.配对表 and not 组字中 and not 事件.modifiers():
+            游 = self.textCursor()
+            if not 游.hasSelection():
+                行文 = 游.block().text()
+                位 = 游.positionInBlock()
+                if 行文[位:位 + 1] == self.配对表[文本]:
+                    # 右边就是配对的那一半 —— 光标移过去即可
+                    游.movePosition(QTextCursor.Right)
+                    self.setTextCursor(游)
+                    return
         if 文本 in self.配对表 and not 事件.modifiers() and not 组字中:
             self._自动配对(文本, self.配对表[文本])
             return
@@ -613,6 +678,31 @@ class 编辑器(QPlainTextEdit):
 
     # —— 注释切换 ——
 
+    #: 认得的注释前缀。核语言用「核核 」，英文「#」也照样能用（见 说明.md），
+    #: 所以切换注释两种都要认 —— 以前只认「核核 」，
+    #: 英文 # 注释行永远被当成「没注释」，在混排文件里行为不一致。
+    注释前缀 = ("核核 ", "#", "# ")
+
+    @classmethod
+    def _取注释前缀(cls, 文):
+        """这一行的注释前缀（去掉缩进后看）；不是注释行则返回 None。
+
+        「核核」后必须不是标识符字符 —— 和 核.py 翻译器的判定一致，
+        否则「核核紧贴」会被误当成注释。
+        """
+        剥 = 文.lstrip()
+        if 剥.startswith("核核"):
+            后面 = 剥[2:]
+            if not 后面 or not (
+                后面[0] == "_"
+                or 后面[0].isalnum()
+                or (ord(后面[0]) > 127 and 后面[0].isidentifier())
+            ):
+                return "核核"
+        if 剥.startswith("#"):
+            return "#"
+        return None
+
     def 切换注释(self):
         光标 = self.textCursor()
         起 = self.document().findBlock(光标.selectionStart()).blockNumber()
@@ -621,26 +711,42 @@ class 编辑器(QPlainTextEdit):
         有内容 = [b for b in 块们 if b.text().strip()]
         if not 有内容:
             return
-        全注释 = all(b.text().lstrip().startswith("核核 ") for b in 有内容)
+        前缀们 = [self._取注释前缀(b.text()) for b in 有内容]
+        全注释 = all(p is not None for p in 前缀们)
         游标 = self.textCursor()
         游标.beginEditBlock()
         for 块 in 块们:
             文 = 块.text()
+            if not 文.strip():
+                continue
+            缩进 = len(文) - len(文.lstrip())
+            体 = 文[缩进:]
+            游 = QTextCursor(块)
             if 全注释:
-                缩进 = len(文) - len(文.lstrip())
-                若去掉 = 文[:缩进] + 文[缩进:].replace("核核 ", "", 1)
-                游 = QTextCursor(块)
+                # 去掉注释前缀。原来是「核核 abc」就只去掉「核核 」，
+                # 原来是「# abc」就只去掉「#」和它后面那个空格。
+                去掉 = 体
+                if 去掉.startswith("核核"):
+                    去掉 = 去掉[2:]
+                    if 去掉.startswith(" "):
+                        去掉 = 去掉[1:]
+                elif 去掉.startswith("#"):
+                    去掉 = 去掉[1:]
+                    if 去掉.startswith(" "):
+                        去掉 = 去掉[1:]
+                新文 = 文[:缩进] + 去掉
                 游.movePosition(QTextCursor.StartOfBlock)
                 游.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
-                游.insertText(若去掉)
+                游.insertText(新文)
             else:
-                if not 文.strip():
-                    continue
-                缩进 = len(文) - len(文.lstrip())
-                游 = QTextCursor(块)
+                # 加注释：一律用核语言的「核核 」。
+                # 这一行本身已经是英文 # 注释的，保持「# 」不动；
+                # 否则统一用「核核 」—— 规则简单可预期，
+                # 不会出现「同一个文件里有的行是 #、有的行是 核核」的摇摆。
+                用什么 = "# " if 体.startswith("#") else "核核 "
                 游.movePosition(QTextCursor.StartOfBlock)
                 游.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, 缩进)
-                游.insertText("核核 ")
+                游.insertText(用什么)
         游标.endEditBlock()
 
     # —— 查找 ——

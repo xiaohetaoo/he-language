@@ -47,7 +47,17 @@ try:
 except subprocess.TimeoutExpired:
     程序.kill()
     码 = 程序.wait()
-输出 = (程序.stdout.read() or b"").decode("utf-8", "replace").strip()
+# 注意：不能在这里用 程序.stdout.read() —— 打包出来的是 console=False 的
+# GUI 程序，标准输出管道不会关闭，read() 会一直等到进程结束，
+# 整个测试就挂在那儿不动了（实测卡死过一次）。
+# 这里直接放弃读输出：界面是否正常由「进程还活着 + 找到窗口标题」判断，
+# 详细的界面自检走 --自检界面 那一路。
+try:
+    if 程序.stdout:
+        程序.stdout.close()
+except Exception:
+    pass
+输出 = ""
 print("退出码:", 码)
 if 输出:
     print("输出:", 输出[:600])

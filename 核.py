@@ -23,7 +23,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.10"
+版本 = "0.0.11"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -534,7 +534,18 @@ class 未定义报告:
 
 
 def 默认报告路径(源文件=None):
-    """未定义清单默认放在当前工作目录，一个项目一份。"""
+    """未定义清单放在哪儿。
+
+    规则：**源文件所在目录**，一个项目一份。
+    以前这个函数收了「源文件」参数却完全没用，永远写到 os.getcwd() ——
+    于是从别的目录运行 `核 运行 D:\\项目\\a.xht` 时，清单会掉到
+    进程当前目录，而不是项目目录；而且「核 报告 D:\\项目\\a.xht」
+    查的是源文件目录下的清单，和实际写出的位置对不上。
+    """
+    if 源文件:
+        目录 = os.path.dirname(os.path.abspath(源文件))
+        if 目录:
+            return os.path.join(目录, 未定义文件名)
     return os.path.abspath(os.path.join(os.getcwd(), 未定义文件名))
 
 
@@ -567,6 +578,34 @@ def _找引号结束(s, j, 引号):
             return k
         k += 1
     return n
+
+
+def 字符串区间(s):
+    """找出 s 里所有字符串字面量的区间 [(起, 止), …]。
+
+    供编辑器的语法高亮用 —— 高亮必须知道哪些字符在字符串里，
+    否则会把字符串内容误当成注释/关键字染色。
+    这里和转译器用同一套前缀与引号规则，保证两边说同样的话。
+    """
+    区间 = []
+    i, n = 0, len(s)
+    while i < n:
+        m = _字符串起点.match(s, i)
+        if not m:
+            i += 1
+            continue
+        # 前缀后面必须不是标识符字符（否则 x'abc' 里的 abc 不是字符串）
+        前缀 = m.group("py") or m.group("he")
+        if 前缀 and i > 0 and 是标识符字符(s[i - 1]):
+            i += 1
+            continue
+        引号 = m.group("q")
+        内容起 = m.end()
+        结束 = _找引号结束(s, 内容起, 引号)
+        止 = min(结束 + len(引号), n)
+        区间.append((i, 止))
+        i = 止 if 止 > i else i + 1
+    return 区间
 
 
 def _找字段结束(s, i):
@@ -1182,9 +1221,18 @@ def 转译文件(路径, 输出路径=None):
 
 
 def 查看报告(路径=None):
+    """查看未定义清单。
+
+    带路径时看的是**那个文件所在目录**的清单（和运行时写出的位置一致）；
+    不带路径时看当前目录的，并提示别的目录里可能也有。
+    """
     报告路径 = 默认报告路径(路径) if 路径 else os.path.join(os.getcwd(), 未定义文件名)
     if not os.path.exists(报告路径):
         print("还没有未定义记录：%s" % 报告路径)
+        if not 路径:
+            print("提示：清单写在**运行的文件所在目录**下。", file=sys.stderr)
+            print("      例如「核 报告 D:\\项目\\a.xht」会去看 D:\\项目\\未定义.txt。",
+                  file=sys.stderr)
         return 0
     print("未定义清单：%s\n" % 报告路径)
     with open(报告路径, "r", encoding="utf-8") as f:
