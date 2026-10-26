@@ -76,6 +76,47 @@ def _自检(输出目录):
         报告['恢复后字号'] = 窗.字号
     except Exception as e:
         报告['字号检查失败'] = str(e)
+    # 0.0.12 起：帮助与版本控制是运行时 import 的，静态分析扫不到，
+    # 打包时若漏了 --hidden-import，这里就会暴露出来（ModuleNotFoundError）。
+    for _名, _模块 in (('帮助窗口', None), ('版本控制', None),
+                       ('版本控制窗口', None)):
+        try:
+            __import__(_名)
+            报告['模块_' + _名] = True
+        except Exception as e:
+            报告['模块_' + _名] = '导入失败：%s' % e
+    try:
+        import 版本控制
+        # 用主窗的真实项目目录判断（打包版会自动上移一级，见 _默认项目目录）
+        _项目 = 窗.项目目录
+        报告['版本控制_探测目录'] = _项目
+        报告['版本控制可用'] = bool(版本控制.状态(_项目).get('可用'))
+    except Exception as e:
+        报告['版本控制可用'] = '检查失败：%s' % e
+    try:
+        import 帮助窗口
+        # 版本历史读的是项目目录里的 版本/，和用户实际点开时一致
+        报告['读到归档版本数'] = len(帮助窗口.已归档版本(窗.项目目录))
+    except Exception as e:
+        报告['读到归档版本数'] = '失败：%s' % e
+    try:
+        窗.打开说明文档()
+        应用.processEvents()
+        报告['打开说明文档'] = 窗.标签栏.count() > 1
+    except Exception as e:
+        报告['打开说明文档'] = '失败：%s' % e
+    try:
+        _编2 = 窗.当前
+        _编2.置文本('核定义 f()：\n    核说(1)\n核说(2)\n')
+        _块 = _编2.document().findBlockByNumber(0)
+        报告['折叠可用'] = bool(_编2.可折叠(_块))
+        if _编2.可折叠(_块):
+            _编2.切换折叠(_块)
+            应用.processEvents()
+            报告['折叠真的生效'] = not _编2.document().findBlockByNumber(1).isVisible()
+            _编2.全部展开()
+    except Exception as e:
+        报告['折叠可用'] = '失败：%s' % e
     try:
         窗.grab().save(os.path.join(输出目录, '自检_Qt.png'))
     except Exception as e:

@@ -167,11 +167,14 @@ class 顶行(QWidget):
         布局.addWidget(self.项目名)
 
         布局.addSpacing(10)
-        版本 = QLabel("⎇  版本控制")
-        版本.setObjectName("topBtn")
-        版本.setCursor(Qt.PointingHandCursor)
-        版本.mousePressEvent = lambda e: 主窗.状态("版本控制尚未接入 git")
-        布局.addWidget(版本)
+        # 版本控制：显示当前分支和改动数，点开看具体改了哪些文件。
+        # 原来这里是个死的占位标签，点一下只弹一句「尚未接入 git」。
+        self.版本钮 = QLabel("⎇ 版本控制")
+        self.版本钮.setObjectName("topBtn")
+        self.版本钮.setCursor(Qt.PointingHandCursor)
+        self.版本钮.setToolTip("版本控制（只读：分支与改动文件）")
+        self.版本钮.mousePressEvent = lambda e: 主窗.版本控制面板()
+        布局.addWidget(self.版本钮)
 
         布局.addStretch(1)
 
@@ -480,6 +483,10 @@ class 主窗(QMainWindow):
         self.装载项目树(self.项目目录)
         self.新建()
         self._刷新标题()
+        # 顶行的版本控制按钮：启动时读一次 git 状态。
+        # 用 singleShot 排到事件队列末尾 —— 读 git 要起好几个子进程，
+        # 放在这里同步跑会让窗口晚一秒多才显示出来。先让界面出来再说。
+        QTimer.singleShot(0, self.刷新版本状态)
 
     def _还原窗口尺寸(self):
         """按上次保存的尺寸和位置还原；越界或异常就回默认值。"""
@@ -807,6 +814,11 @@ class 主窗(QMainWindow):
             ("Ctrl+Shift+Tab", lambda: self._轮换标签(-1)),
             ("F2", self.重命名当前),
             ("Ctrl+Shift+F", self.在项目中查找),
+            # 代码折叠：跟 VS Code 的 Ctrl+Shift+[ / ] 一致，好记
+            ("Ctrl+Shift+[", self.折叠当前),
+            ("Ctrl+Shift+]", self.展开当前),
+            ("Ctrl+Shift+9", self.全部折叠),
+            ("Ctrl+Shift+0", self.全部展开),
         ):
             QShortcut(QKeySequence(键), self).activated.connect(动作)
 
@@ -1055,6 +1067,8 @@ class 主窗(QMainWindow):
         self.刷新标签(编)
         self._刷新标题()
         self.状态("已保存 %s" % os.path.basename(编.文件路径))
+        # 存盘是改动的天然分界点，顺手刷一下版本状态
+        self.刷新版本状态()
         return True
 
     def 保存当前(self):
@@ -1102,6 +1116,9 @@ class 主窗(QMainWindow):
         self.项目路径标签.setText(os.path.basename(目录) or 目录)
         self.状态项目.setText(os.path.basename(目录) or 目录)
         self.存配置()
+        # 换了项目目录，仓库也可能换了一个。同样延后 —— 这个方法在
+        # 启动时也会被调用，同步读 git 会拖慢窗口显示。
+        QTimer.singleShot(0, self.刷新版本状态)
 
     def _填目录(self, 节点, 目录):
         from PySide6.QtWidgets import QFileIconProvider
@@ -1461,11 +1478,170 @@ class 主窗(QMainWindow):
                 return
         self.状态("还没有未定义记录")
 
+    # ================= 帮助 =================
+
+    def 打开说明文档(self):
+        """打开项目自带的 说明.md。
+
+        tkinter 版一直有「帮助 → 打开说明文档」，迁到 Qt 时漏了 ——
+        用户手边明明有说明书，界面上却打不开。
+
+        在**内置标签页**里打开，而不是丢给系统默认程序：
+          · 不依赖 .md 的文件关联（没装 Markdown 程序的机器上会失败）；
+          · 不会突然弹出记事本盖住界面；
+          · 和「打开版本记录」行为一致。
+        """
+        路径 = self._找文档("说明.md")
+        if 路径:
+            self.打开(路径)
+        else:
+            self.状态("找不到 说明.md")
+
+    @staticmethod
+    def _找文档(名):
+        """在程序目录和打包临时目录里找一份文档，找不到返回 None。"""
+        for 基 in (这里, getattr(sys, "_MEIPASS", 这里)):
+            if not 基:
+                continue
+            候选 = os.path.join(基, 名)
+            if os.path.isfile(候选):
+                return 候选
+        return None
+
+    def 打开版本记录(self):
+        路径 = self._找文档("版本记录.md")
+        if 路径:
+            self.打开(路径)
+        else:
+            self.状态("找不到 版本记录.md")
+
+    def 版本历史(self):
+        try:
+            import 帮助窗口
+
+            # 传项目目录：打包版的 版本/ 不在 exe 里，得去项目目录找
+            self._版本历史 = 帮助窗口.版本历史对话框(
+                self, 核.版本, self.项目目录
+            )
+            self._版本历史.show()
+            self._版本历史.raise_()
+        except Exception as e:  # noqa: BLE001
+            self.状态("打不开版本历史：%s" % e)
+
+    def 关于(self):
+        try:
+            import 帮助窗口
+
+            self._关于 = 帮助窗口.关于对话框(self, 核.版本)
+            self._关于.show()
+            self._关于.raise_()
+        except Exception as e:  # noqa: BLE001
+            self.状态("打不开关于：%s" % e)
+
+    def 语法速查(self):
+        """帮助菜单里的「语法速查」就是右侧的对照表面板 —— 不另造一份。
+
+        原来是独立弹窗，但 Qt 版已经有常驻的对照表面板，
+        再做一个只显示同样内容的窗口就是重复功能。
+        """
+        if not self._对照可见:
+            self.切换对照表()
+        else:
+            self.状态("语法对照表已在右侧（Ctrl+2 可开关）")
+
     # ================= 视图与主题 =================
 
     def 切换注释(self):
         if self.当前:
             self.当前.切换注释()
+
+    # ================= 代码折叠 =================
+
+    def 折叠当前(self):
+        """折叠光标所在的块。"""
+        编 = self.当前
+        if 编 is None:
+            return
+        块 = 编.textCursor().block()
+        if not 编.可折叠(块):
+            self.状态("这一行不是块的开头（块以冒号结尾）")
+            return
+        if not 编.已折叠(块):
+            编.切换折叠(块)
+        self.状态("已折叠")
+
+    def 展开当前(self):
+        """展开光标所在的块；光标在块内部时展开覆盖它的那一块。"""
+        编 = self.当前
+        if 编 is None:
+            return
+        块 = 编.textCursor().block()
+        if 编.已折叠(块):
+            编.切换折叠(块)
+            self.状态("已展开")
+            return
+        # 光标在块内部：找把它盖住的那个折叠
+        行 = 块.blockNumber()
+        上 = 编.document().firstBlock()
+        while 上.isValid():
+            if 编.已折叠(上):
+                止 = 编.折叠区(上)
+                if 止 is not None and 上.blockNumber() < 行 <= 止:
+                    编.切换折叠(上)
+                    self.状态("已展开")
+                    return
+            上 = 上.next()
+        self.状态("这一行没有被折叠")
+
+    def 全部折叠(self):
+        if self.当前:
+            self.当前.全部折叠()
+            self.状态("已全部折叠")
+
+    def 全部展开(self):
+        if self.当前:
+            self.当前.全部展开()
+            self.状态("已全部展开")
+
+    # ================= 版本控制（只读） =================
+
+    def 刷新版本状态(self):
+        """读一次 git 状态并更新顶行按钮文字。
+
+        只读 —— 不提交、不暂存、不推送。详见 版本控制.py 的模块说明。
+        git 不存在或不是仓库时降级成「未启用」，不报错。
+        """
+        按钮 = getattr(self.顶行, "版本钮", None)
+        if 按钮 is None:
+            return
+        try:
+            import 版本控制
+
+            self._版本状态 = 版本控制.状态(self.项目目录)
+            短 = 版本控制.摘要(self._版本状态)
+            按钮.setText(短)
+            原因 = self._版本状态.get("原因") or ""
+            提示 = "版本控制"
+            if self._版本状态["可用"]:
+                提示 = "分支 %s　·　%d 个文件有改动（点击查看）" % (
+                    self._版本状态["分支"], len(self._版本状态["改动"])
+                )
+            elif 原因:
+                提示 = "版本控制未启用：%s" % 原因
+            按钮.setToolTip(提示)
+        except Exception as e:  # noqa: BLE001
+            按钮.setText("⎇ 未启用")
+            按钮.setToolTip("版本控制读取失败：%s" % e)
+
+    def 版本控制面板(self):
+        try:
+            import 版本控制窗口
+
+            self._版本窗 = 版本控制窗口.版本控制窗口(self, self.项目目录)
+            self._版本窗.show()
+            self._版本窗.raise_()
+        except Exception as e:  # noqa: BLE001
+            self.状态("打不开版本控制面板：%s" % e)
 
     def 快速打开(self):
         try:
@@ -1607,6 +1783,19 @@ class 主窗(QMainWindow):
         return 动作
 
     def 弹主菜单(self, 锚):
+        菜单 = self._建主菜单()
+        菜单.exec(锚.mapToGlobal(锚.rect().bottomLeft()))
+        # 菜单用完即弃：里面的 QAction 都以菜单为父对象，
+        # 菜单一销毁，它们跟着回收，不会在主窗里越堆越多。
+        菜单.deleteLater()
+
+    def _建主菜单(self):
+        """把主菜单建好并返回（不弹出）。
+
+        单独抽出来是为了能测：`弹主菜单` 会 exec() 阻塞在模态循环里，
+        测试拿不到菜单对象，也就没法断言「帮助菜单里到底有没有那几项」。
+        拆开之后测试可以拿到菜单逐个检查条目。
+        """
         菜单 = QMenu(self)
         文件 = 菜单.addMenu("文件")
         for 名, 命令 in (
@@ -1657,6 +1846,16 @@ class 主窗(QMainWindow):
             编.addAction(self._加动作(编, 名, 命令))
         菜单.addSeparator()
 
+        码 = 菜单.addMenu("代码")
+        for 名, 命令 in (
+            ("折叠当前块", self.折叠当前),
+            ("展开当前块", self.展开当前),
+            ("全部折叠", self.全部折叠),
+            ("全部展开", self.全部展开),
+        ):
+            码.addAction(self._加动作(码, 名, 命令))
+        菜单.addSeparator()
+
         运 = 菜单.addMenu("运行")
         for 名, 命令 in (
             ("运行", self.运行),
@@ -1678,15 +1877,25 @@ class 主窗(QMainWindow):
             ("显示缩进参考线", self.切换缩进线),
             ("增大字号", lambda: self.改字号(1)),
             ("减小字号", lambda: self.改字号(-1)),
+            ("版本控制", self.版本控制面板),
         ):
             视.addAction(self._加动作(视, 名, 命令))
         菜单.addSeparator()
 
+        助 = 菜单.addMenu("帮助")
+        for 名, 命令 in (
+            ("语法速查", self.语法速查),
+            ("打开说明文档", self.打开说明文档),
+            ("版本历史", self.版本历史),
+            ("打开版本记录", self.打开版本记录),
+        ):
+            助.addAction(self._加动作(助, 名, 命令))
+        助.addSeparator()
+        助.addAction(self._加动作(助, "关于核工坊", self.关于))
+        菜单.addSeparator()
+
         菜单.addAction(self._加动作(菜单, "设置…", self.打开设置))
-        菜单.exec(锚.mapToGlobal(锚.rect().bottomLeft()))
-        # 菜单用完即弃：里面的 QAction 都以菜单为父对象，
-        # 菜单一销毁，它们跟着回收，不会在主窗里越堆越多。
-        菜单.deleteLater()
+        return 菜单
 
     def 弹出项目菜单(self, 锚):
         菜单 = QMenu(self)

@@ -9,10 +9,10 @@
 
 import re
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen, QTextCharFormat,
-    QTextCursor, QSyntaxHighlighter, QKeyEvent,
+    QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen, QTextBlockUserData,
+    QTextCharFormat, QTextCursor, QSyntaxHighlighter, QKeyEvent,
 )
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
@@ -145,7 +145,29 @@ class 高亮器(QSyntaxHighlighter):
 # ---------------------------------------------------------------------------
 
 
+class 折叠数据(QTextBlockUserData):
+    """挂在块上的折叠标记。
+
+    为什么不用 QTextBlock.setUserState()：
+    **userState 被 QSyntaxHighlighter 内部占用** —— Qt 每次重新高亮都会
+    把上一块的 userState 往下一块传播（默认值 -1，即所有位都是 1）。
+    用一个位当折叠标记会和它打架：新文档里每一块都「看起来已折叠」；
+    而高亮一跑，真正的折叠标记又会被传播过来的值冲掉。
+    QTextBlockUserData 才是 Qt 给「用户自己的块级数据」准备的位置，
+    高亮器不碰它，且它会跟着块一起在编辑中搬运。
+    """
+
+    __slots__ = ("折叠",)
+
+    def __init__(self):
+        super().__init__()
+        self.折叠 = False
+
+
 class 行号区(QWidget):
+    #: 折叠三角占用的左边距（像素）。行号是右对齐的，两者不会打架。
+    折叠栏宽 = 16
+
     def __init__(self, 编辑器):
         super().__init__(编辑器)
         self.编辑器 = 编辑器
@@ -156,6 +178,9 @@ class 行号区(QWidget):
         # 太窄时两位数就挤到边缘，正文看起来像被行号压住了。
         self.宽度 = 58
         self.setFixedWidth(self.宽度)
+        # 折叠三角的悬停高亮：移上去变亮，让用户知道这里能点
+        self._悬停块 = -1
+        self.setMouseTracking(True)
 
     def 按行号调整宽度(self, 总行数):
         """按「最大行号位数」和当前字体的实际字宽算宽度。
@@ -221,9 +246,64 @@ class 行号区(QWidget):
                     0, 顶, self.宽度 - 10, 高,
                     Qt.AlignRight | Qt.AlignVCenter, str(号),
                 )
+                if 编辑器.可折叠(块):
+                    self._画折叠三角(绘, 块, 顶, 高, 色)
             块 = 块.next()
             顶 += 高
             号 += 1
+
+    def _画折叠三角(self, 绘, 块, 顶, 高, 色):
+        """在行号左侧画折叠三角：展开是 ▼，已折叠是 ▶。"""
+        展开 = not self.编辑器.已折叠(块)
+        色键 = "行号字"
+        if 块.blockNumber() == self._悬停块:
+            色键 = "文本"          # 悬停时变亮，提示可点
+        绘.setPen(Qt.NoPen)
+        绘.setBrush(QColor(色.get(色键, 色["行号字"])))
+        中 = 顶 + 高 // 2
+        if 展开:
+            # ▼ 向下的三角
+            绘.drawPolygon([
+                QPoint(4, 中 - 3), QPoint(11, 中 - 3), QPoint(7, 中 + 3),
+            ])
+        else:
+            # ▶ 向右的三角
+            绘.drawPolygon([
+                QPoint(5, 中 - 4), QPoint(5, 中 + 4), QPoint(12, 中),
+            ])
+        绘.setBrush(Qt.NoBrush)
+
+    def 折叠三角处(self, 位置):
+        """这个坐标是不是落在某个折叠三角上？是则返回块，否则 None。"""
+        if 位置.x() > self.折叠栏宽:
+            return None
+        块 = self.编辑器._块在y(位置.y())
+        if 块 is None or not 块.isVisible():
+            return None
+        return 块 if self.编辑器.可折叠(块) else None
+
+    def mousePressEvent(self, 事件):
+        if 事件.button() == Qt.LeftButton:
+            块 = self.折叠三角处(事件.position().toPoint())
+            if 块 is not None:
+                self.编辑器.切换折叠(块)
+                return
+        super().mousePressEvent(事件)
+
+    def mouseMoveEvent(self, 事件):
+        块 = self.折叠三角处(事件.position().toPoint())
+        新 = 块.blockNumber() if 块 is not None else -1
+        if 新 != self._悬停块:
+            self._悬停块 = 新
+            self.update()
+        self.setCursor(Qt.PointingHandCursor if 块 is not None else Qt.ArrowCursor)
+        super().mouseMoveEvent(事件)
+
+    def leaveEvent(self, 事件):
+        if self._悬停块 != -1:
+            self._悬停块 = -1
+            self.update()
+        super().leaveEvent(事件)
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +312,7 @@ class 行号区(QWidget):
 
 
 class 编辑器(QPlainTextEdit):
-    """PyCharm 风格代码编辑器，带行号、当前行、缩进参考线。"""
+    """PyCharm 风格代码编辑器，带行号、当前行、缩进参考线、代码折叠。"""
 
     光标移动 = Signal()
 
@@ -246,6 +326,8 @@ class 编辑器(QPlainTextEdit):
         self.制表宽 = int(getattr(主窗, "制表宽", 4))
         # 输入法组字状态（由 inputMethodEvent 维护）
         self._组字中 = False
+        # 当前折起来的块数。0 表示没有折叠 —— 文本变化时据此跳过全文重算。
+        self._折叠数 = 0
 
         self.设置字体()
 
@@ -365,6 +447,214 @@ class 编辑器(QPlainTextEdit):
         self.高亮.开 = bool(开)
         self.高亮.rehighlight()
 
+    # —— 代码折叠 ——
+    #
+    # 折叠什么：以冒号结尾、且**下一行缩进更深**的行。
+    #   核若 x：            ← 可折叠
+    #       核说(x)         ← 被折起来的部分
+    #   核说(1)             ← 缩进回到同级，折叠到此为止
+    # 核语言里块的开头必然是冒号（半角全角都认），所以判定很直接，
+    # 不需要真的做语法分析。
+
+    @staticmethod
+    def 缩进数(文本):
+        """这一行开头的空白宽度（制表符按 1 个字符算，不做制表宽换算）。"""
+        剥 = 文本.lstrip(" \t\u3000")
+        return len(文本) - len(剥)
+
+    @staticmethod
+    def 是块开头(文本):
+        """这一行是不是一个块的开头（以冒号结尾）。"""
+        剥 = 文本.rstrip()
+        if not 剥:
+            return False
+        # 去掉行尾注释再判断：`核若 x： 核核 说明` 也算块开头
+        井 = 剥.find("核核")
+        if 井 >= 0:
+            剥 = 剥[:井].rstrip()
+        if not 剥:
+            return False
+        return 剥.endswith("：") or 剥.endswith(":")
+
+    def 折叠区(self, 块):
+        """返回该块能折起来的最后一行号（含），不能折则 None。"""
+        if 块 is None or not 块.isValid():
+            return None
+        文本 = 块.text()
+        if not self.是块开头(文本):
+            return None
+        缩进 = self.缩进数(文本)
+        起 = 块.blockNumber() + 1
+        止 = -1
+        当前 = self.document().findBlockByNumber(起)
+        while 当前.isValid():
+            行 = 当前.text()
+            if not 行.strip():
+                # 空行先跳过，但只有它后面还有更深缩进的行时才纳入范围
+                下一 = 当前.next()
+                还有 = False
+                while 下一.isValid() and not 下一.text().strip():
+                    下一 = 下一.next()
+                if 下一.isValid() and self.缩进数(下一.text()) > 缩进:
+                    止 = 当前.blockNumber()
+                    当前 = 当前.next()
+                    continue
+                break
+            if self.缩进数(行) <= 缩进:
+                break
+            止 = 当前.blockNumber()
+            当前 = 当前.next()
+        return 止 if 止 >= 起 else None
+
+    def 可折叠(self, 块):
+        return self.折叠区(块) is not None
+
+    def _数据(self, 块, 需要时新建=False):
+        """取块上的折叠数据（可选地在没有时创建）。"""
+        if 块 is None or not 块.isValid():
+            return None
+        数据 = 块.userData()
+        if 数据 is None and 需要时新建:
+            数据 = 折叠数据()
+            块.setUserData(数据)
+        return 数据
+
+    def 已折叠(self, 块):
+        数据 = self._数据(块)
+        return bool(数据 is not None and 数据.折叠)
+
+    def 切换折叠(self, 块):
+        """展开/折起这一块。"""
+        if not self.可折叠(块):
+            return
+        if self.已折叠(块):
+            self._数据(块).折叠 = False
+        else:
+            self._数据(块, 需要时新建=True).折叠 = True
+            # 折叠前先把光标移出这一块，否则光标会停在看不见的行上
+            self.移出折叠区(块)
+        self.应用折叠()
+        self.行号.update()
+        self.viewport().update()
+
+    def 移出折叠区(self, 开头块):
+        """若光标正落在即将折起的范围内，把它挪到块开头那一行。"""
+        止 = self.折叠区(开头块)
+        if 止 is None:
+            return
+        游 = self.textCursor()
+        行 = 游.blockNumber()
+        if 开头块.blockNumber() < 行 <= 止:
+            新 = QTextCursor(开头块)
+            新.movePosition(QTextCursor.EndOfBlock)
+            self.setTextCursor(新)
+
+    def 全部展开(self):
+        """把所有折叠都展开。"""
+        块 = self.document().firstBlock()
+        改了 = False
+        while 块.isValid():
+            数据 = 块.userData()
+            if 数据 is not None and getattr(数据, "折叠", False):
+                数据.折叠 = False
+                改了 = True
+            块 = 块.next()
+        if 改了:
+            self.应用折叠()
+            self.行号.update()
+            self.viewport().update()
+        else:
+            self._折叠数 = 0
+
+    def 全部折叠(self):
+        """把所有可折叠的块都折起来。"""
+        块 = self.document().firstBlock()
+        有 = False
+        while 块.isValid():
+            if self.可折叠(块):
+                self._数据(块, 需要时新建=True).折叠 = True
+                有 = True
+            块 = 块.next()
+        if 有:
+            # 光标可能落在被折起的行上，先挪到文末（可见）
+            游 = self.textCursor()
+            游.movePosition(QTextCursor.End)
+            self.setTextCursor(游)
+            self.应用折叠()
+            self.行号.update()
+            self.viewport().update()
+
+    def 应用折叠(self):
+        """按每块的折叠标记重新设置可见性。
+
+        先假定全部可见再逐块隐藏：折叠区域在编辑后会变（缩进改了、
+        冒号删了），只往里加不往外放的话，展开之后那些行仍然是隐藏的。
+        """
+        文档 = self.document()
+        块 = 文档.firstBlock()
+        折叠中 = 0          # 还需要隐藏到第几块
+        个数 = 0
+        while 块.isValid():
+            号 = 块.blockNumber()
+            if 折叠中 and 号 > 折叠中:
+                折叠中 = 0
+            if 折叠中:
+                块.setVisible(False)
+            else:
+                块.setVisible(True)
+                数据 = 块.userData()
+                if 数据 is not None and getattr(数据, "折叠", False):
+                    止 = self.折叠区(块)
+                    if 止 is not None:
+                        折叠中 = 止
+                        个数 += 1
+                    else:
+                        # 已经不是一个块开头了（比如冒号被删了），清掉标记
+                        数据.折叠 = False
+            块 = 块.next()
+        self._折叠数 = 个数
+        self._文档重排()
+
+    def _文档重排(self):
+        """让 Qt 按新的可见性重新排版。
+
+        setVisible 只改标记，不会自动重算文档高度 —— 不通知的话
+        被折起来的行仍然占着位置（或者反过来，展开后不占位）。
+        """
+        文档 = self.document()
+        try:
+            文档.markContentsDirty(0, 文档.characterCount())
+        except (AttributeError, TypeError):
+            pass
+        框 = self.viewport()
+        框.update()
+        self._更新行号宽()
+
+    def _块在y(self, y):
+        """行号栏里这个 y 坐标对应哪个块（用于命中测试）。"""
+        编辑器 = self
+        块 = 编辑器.firstVisibleBlock()
+        偏移 = 编辑器.viewport().y() - self.y()
+        顶 = (
+            int(
+                编辑器.blockBoundingGeometry(块)
+                .translated(编辑器.contentOffset())
+                .top()
+            )
+            + 偏移
+        )
+        安全 = 0
+        while 块.isValid() and 安全 < 20000:
+            高 = int(编辑器.blockBoundingRect(块).height())
+            下 = 顶 + max(高, 0)
+            if 顶 <= y < 下:
+                return 块
+            # 被折起来的块高度为 0，跳过时不算命中也别死循环
+            顶 = 下
+            块 = 块.next()
+            安全 += 1
+        return None
+
     # —— 行号 ——
 
     def _更新行号宽(self, _=None):
@@ -418,7 +708,35 @@ class 编辑器(QPlainTextEdit):
         选区.cursor = self.textCursor()
         选区.cursor.clearSelection()
         self.setExtraSelections([选区])
+        # 安全网：光标万一落到被折起来的行上（Ctrl+End、查找定位、
+        # 撤销都可能），就把那一块展开 —— 绝不能让人在看不见的行上打字。
+        self._展开光标处的折叠()
         self.光标移动.emit()
+
+    def _展开光标处的折叠(self):
+        if not getattr(self, "_折叠数", 0):
+            return
+        块 = self.textCursor().block()
+        if 块.isValid() and not 块.isVisible():
+            self._展开含此块的折叠(块.blockNumber())
+
+    def _展开含此块的折叠(self, 行号):
+        """把「覆盖了这一行」的那个折叠展开。"""
+        块 = self.document().firstBlock()
+        while 块.isValid():
+            数据 = 块.userData()
+            if (
+                数据 is not None
+                and getattr(数据, "折叠", False)
+                and 块.blockNumber() < 行号
+            ):
+                止 = self.折叠区(块)
+                if 止 is not None and 行号 <= 止:
+                    数据.折叠 = False
+                    self.应用折叠()
+                    self.行号.update()
+                    return
+            块 = 块.next()
 
     def _文本变化(self):
         """文本变了。这里只做最轻的记账，重的 UI 更新一律延后。
@@ -430,6 +748,13 @@ class 编辑器(QPlainTextEdit):
         """
         if getattr(self, "_载入中", False):
             return
+        # 有折叠时才重算可见性：折叠状态存在块的 userState 上，
+        # 编辑之后块的相对关系会变（缩进改了、冒号删了），
+        # 必须重新算一遍「哪些块该藏起来」。没有折叠就完全跳过 ——
+        # 否则每敲一个字都要走一遍全文。
+        if getattr(self, "_折叠数", 0):
+            self.应用折叠()
+            self.行号.update()
         if not self.已改:
             self.已改 = True
             self.主窗.刷新标签(self)
@@ -826,6 +1151,9 @@ class 编辑器(QPlainTextEdit):
         self._载入中 = True
         self.setPlainText(文本)
         self._载入中 = False
+        # 整份文本都换了，旧的折叠状态没有意义（userState 也随旧块一起没了）
+        self._折叠数 = 0
+        self.应用折叠()
         self.已改 = bool(标记已改)
         if hasattr(self, "主窗") and self.主窗 is not None:
             self.主窗.刷新标签(self)

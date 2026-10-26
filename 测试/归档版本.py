@@ -33,8 +33,13 @@ import 核  # noqa: E402
     "快速打开.py", "配置.py",
     # Qt 版打包入口（PyInstaller 用的就是它，别漏）
     "_启动Qt.py",
+    # 0.0.12 起：帮助、版本控制
+    "帮助窗口.py", "版本控制.py", "版本控制窗口.py",
 )
 资源目录 = ("例子", "素材")
+#: 一起快照的文档。README 和 LICENSE 也要 —— 归档的目的是「这一版什么样」
+#: 都能回看，缺了许可证声明就不完整。
+文档文件 = ("说明.md", "版本记录.md", "README.md", "LICENSE", "对照表.md")
 
 
 def 归档(覆盖=False):
@@ -67,7 +72,7 @@ def 归档(覆盖=False):
         if os.path.isdir(源):
             shutil.copytree(源, os.path.join(目标, 名))
             复制.append(名 + "/")
-    for 名 in ("说明.md", "版本记录.md"):
+    for 名 in 文档文件:
         源 = os.path.join(根目录, 名)
         if os.path.exists(源):
             shutil.copy2(源, os.path.join(目标, 名))

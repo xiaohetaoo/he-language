@@ -10,43 +10,81 @@ exe = os.path.join(这里, "dist", "核工坊Qt.exe")
 
 程序 = subprocess.Popen([exe], cwd=这里,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-print("已启动 pid=%d，等 6 秒让它把界面画出来…" % 程序.pid)
-time.sleep(6)
+print("已启动 pid=%d，轮询等窗口出现…" % 程序.pid)
+
+
+def 找窗口():
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        用户 = ctypes.windll.user32
+        标题们 = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def 回调(hwnd, _):
+            if 用户.IsWindowVisible(hwnd):
+                长 = 用户.GetWindowTextLengthW(hwnd)
+                if 长:
+                    缓 = ctypes.create_unicode_buffer(长 + 1)
+                    用户.GetWindowTextW(hwnd, 缓, 长 + 1)
+                    标题们.append(缓.value)
+            return True
+
+        用户.EnumWindows(回调, 0)
+        return [t for t in 标题们 if "核工坊" in t]
+    except Exception as e:  # noqa: BLE001
+        print("查窗口失败:", e)
+        return []
+
+
+# 不能固定睡几秒就去找窗口：单文件 exe 要把 107MB 解包到临时目录，
+# 启动本来就要 5~7 秒，机器一忙更久，固定等待会把「慢」误判成「失败」
+# （0.0.12 实测 6.5 秒出现，而旧的固定等待只有 6 秒 → 假报警一次）。
+目标 = []
+起始 = time.time()
+截止 = 起始 + 60
+while time.time() < 截止:
+    if 程序.poll() is not None:
+        print("!! 进程提前退出，退出码 %s" % 程序.returncode)
+        break
+    目标 = 找窗口()
+    if 目标:
+        break
+    time.sleep(0.4)
 
 活着 = 程序.poll() is None
 print("进程仍在运行:", 活着)
+print("找到的核工坊窗口:", 目标)
+if 目标:
+    print("启动耗时：%.1f 秒" % (time.time() - 起始))
 
-# 抓一下窗口标题，确认真的建了窗口
-try:
-    import ctypes
-    from ctypes import wintypes
+def 杀进程树(进程):
+    """结束 exe 的**整棵进程树**。
 
-    用户 = ctypes.windll.user32
-    标题们 = []
+    PyInstaller 单文件 exe 是「引导进程 + 真正跑应用的子进程」两层结构，
+    `terminate()` 只杀得掉引导进程，子进程会变成孤儿：窗口还开着、
+    而且**锁着 dist/核工程Qt.exe**，下一次打包就会因为无法覆盖而失败
+    （实测踩过一次，误以为打包脚本坏了）。
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(进程.pid)],
+            capture_output=True, timeout=15,
+        )
+    except Exception:  # noqa: BLE001
+        try:
+            进程.kill()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        进程.wait(timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
 
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def 回调(hwnd, _):
-        if 用户.IsWindowVisible(hwnd):
-            长 = 用户.GetWindowTextLengthW(hwnd)
-            if 长:
-                缓 = ctypes.create_unicode_buffer(长 + 1)
-                用户.GetWindowTextW(hwnd, 缓, 长 + 1)
-                标题们.append(缓.value)
-        return True
 
-    用户.EnumWindows(回调, 0)
-    目标 = [t for t in 标题们 if "核工坊" in t]
-    print("找到的核工坊窗口:", 目标)
-except Exception as e:  # noqa: BLE001
-    print("查窗口失败:", e)
-    目标 = []
-
-程序.terminate()
-try:
-    码 = 程序.wait(timeout=10)
-except subprocess.TimeoutExpired:
-    程序.kill()
-    码 = 程序.wait()
+杀进程树(程序)
+码 = 程序.returncode if 程序.returncode is not None else -1
 # 注意：不能在这里用 程序.stdout.read() —— 打包出来的是 console=False 的
 # GUI 程序，标准输出管道不会关闭，read() 会一直等到进程结束，
 # 整个测试就挂在那儿不动了（实测卡死过一次）。
