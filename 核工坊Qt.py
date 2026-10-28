@@ -568,6 +568,11 @@ class 主窗(QMainWindow):
         self._输出 = queue.Queue()
         self._轮询 = None
         self._读线程 = None
+        # 程序是不是正在退出。closeEvent 里靠它判断「该不该弹模态框」——
+        # 退出流程中弹模态框会把事件循环卡死。
+        self._正在退出 = False
+        #: 收到 aboutToQuit 信号（任何人调 QApplication.quit() 都会发）
+        self._收到退出信号 = False
         self._项目可见 = True
         self._对照可见 = True
         self._运行可见 = True
@@ -594,6 +599,17 @@ class 主窗(QMainWindow):
         self._版本查询 = 版本查询器(self)
         self._版本查询.好了.connect(self._版本状态好了)
         QTimer.singleShot(0, self.刷新版本状态)
+        # 记住「程序层面要退了」：任何人调 QApplication.quit() 都会发这个信号。
+        # closeEvent 里靠它判断「该不该弹模态框」——
+        # 退出流程中弹模态框，事件循环已经在收尾，那个框永远等不到回答，
+        # 整个程序就卡死退不出去。
+        try:
+            QApplication.instance().aboutToQuit.connect(self._标记退出中)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _标记退出中(self):
+        self._收到退出信号 = True
 
     def _还原窗口尺寸(self):
         """按上次保存的尺寸和位置还原；越界或异常就回默认值。"""
@@ -1170,9 +1186,30 @@ class 主窗(QMainWindow):
             目录 = os.path.dirname(编.文件路径)
             if 目录 and not os.path.isdir(目录):
                 os.makedirs(目录, exist_ok=True)
-            with open(编.文件路径, "w", encoding="utf-8", newline="\n") as f:
-                f.write(编.取文本())
+            # **原子写**：先写临时文件，再 os.replace 换上去。
+            #
+            # 直接 open(路径, "w") 是先把原文件**清空**再写 ——
+            # 写到一半崩了、断电了、或者磁盘满了，原文件就没了，
+            # 用户的代码直接消失。这是所有「保存」里最要命的一条路。
+            #
+            # os.replace 在同一分区上是原子的：要么是旧内容，要么是新内容，
+            # 不会出现「半截文件」。配置.py 早就这么改了，源文件保存是同一类问题。
+            文本 = 编.取文本()
+            路径 = 编.文件路径
+            临时 = 路径 + ".核工坊.tmp"
+            with open(临时, "w", encoding="utf-8", newline="\n") as f:
+                f.write(文本)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(临时, 路径)
         except OSError as e:
+            # 写失败：把临时文件清掉，别在项目目录里留垃圾。
+            try:
+                临时 = 编.文件路径 + ".核工坊.tmp"
+                if os.path.exists(临时):
+                    os.remove(临时)
+            except OSError:
+                pass
             self.状态("保存失败：%s" % e)
             if 弹窗:
                 QMessageBox.warning(self, "保存失败", str(e))
@@ -1207,7 +1244,19 @@ class 主窗(QMainWindow):
         # 项目树里不显示、双击也不会被关联打开。
         if not 路径.lower().endswith(self.内核.扩展名.lower()):
             路径 += self.内核.扩展名
-        编.文件路径 = os.path.abspath(路径)
+        路径 = os.path.abspath(路径)
+        # 目标已经存在时，再确认一次。
+        # 系统的「另存为」对话框一般会自己问「要不要覆盖」，但那依赖原生对话框
+        # 的行为（Qt 用非原生实现时不问）。这里自己兜住底 ——
+        # 覆盖是破坏性的，不该只靠对话框的实现细节。
+        if os.path.exists(路径) and 路径 != os.path.abspath(编.文件路径 or ""):
+            答 = QMessageBox.question(
+                self, "确认覆盖", "「%s」已经存在，要覆盖吗？" % os.path.basename(路径),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if 答 != QMessageBox.Yes:
+                return False
+        编.文件路径 = 路径
         ok = self.保存(编)
         if ok:
             self.刷新标签(编)
@@ -2281,16 +2330,20 @@ class 主窗(QMainWindow):
         self.最近 = self.最近[:12]
 
     def 退出(self):
-        for 编 in list(self.文档集):
-            if 编.已改:
-                答 = QMessageBox.question(
-                    self, "退出确认", "「%s」还没保存，要保存吗？" % self._文件名(编),
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                )
-                if 答 == QMessageBox.Cancel:
-                    return
-                if 答 == QMessageBox.Yes and not self.保存(编):
-                    return
+        """顶栏 ✕ 按钮走的路径：先问要不要保存，再关窗口。
+
+        **不要在这里自己 quit()** —— 只要调 self.close()，
+        Qt 会走 closeEvent，而 closeEvent 里已经包含了
+        「确认 → 收尾 → 关闭」的完整逻辑。
+        以前两个都做：先弹一遍模态框问保存，再 quit()，
+        而 quit() 又会触发 closeEvent 再问一遍 —— 用户会被问两次；
+        更糟的是第一次用的是模态框，在退出流程里会卡死。
+        现在统一只走一条路：close() → closeEvent。
+        """
+        self.close()
+
+    def _收尾退出(self):
+        """停子进程、停后台线程、写配置。"""
         self.停止(静默=True)
         查询器 = getattr(self, "_版本查询", None)
         if 查询器 is not None:
@@ -2298,7 +2351,138 @@ class 主窗(QMainWindow):
             # 还回来调 _完成（那时窗口对象可能已经先没了）。
             查询器.停()
         self.存配置()
-        QApplication.instance().quit()
+
+    def _逐个处理未保存(self):
+        """有未保存的文档就逐个问要不要保存（模态版）。
+
+        ⚠️ **只能在「用户主动操作」的上下文里调，绝不能在退出流程里调**。
+        程序自己 quit() 时会同步走到 closeEvent，那时弹模态框会把
+        事件循环卡死（实测）。退出路径统一用非模态的 _问要不要保存()。
+
+        现在仍有调用的是「关闭全部」这类菜单动作 —— 那些不涉及退出流程。
+        返回 True = 可以继续；False = 用户选了「取消」，不该继续。
+        """
+        for 编 in list(self.文档集):
+            if not 编.已改:
+                continue
+            答 = QMessageBox.question(
+                self, "保存确认", "「%s」已修改，要保存吗？" % self._文件名(编),
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+            if 答 == QMessageBox.Cancel:
+                return False
+            if 答 == QMessageBox.Yes and not self.保存(编):
+                return False
+        return True
+
+    def closeEvent(self, 事件):
+        """关窗口（Alt+F4、任务栏右键关闭、系统关机）也要先问要不要保存。
+
+        这里以前**根本没有 closeEvent**：顶栏那个「✕」按钮走的是 退出()，
+        有保存确认；但用户按 Alt+F4、点任务栏的关闭、或者系统要关机时，
+        Qt 直接把窗口关掉 —— 未保存的修改无声无息全丢。
+        实测：编辑器里改了内容、标了「已改」，再调 窗.close()，
+        弹都不弹，窗口就没了。
+
+        **两条硬规矩**（都是实测踩出来的）：
+
+        1. 绝不能在这里弹**模态**对话框（QMessageBox.question 是模态的）。
+           程序自己调 应用.quit() 时，Qt 会**同步**派发
+           QEvent.WindowCloseRequest 给顶层窗口 —— 也就是走到这里。
+           实测顺序（offscreen 下打点确认）：
+               quit() 开始 → closeEvent → aboutToQuit → quit() 返回
+           closeEvent 跑在 aboutToQuit **之前**，那时 closingDown() 还是
+           False、aboutToQuit 也还没发 —— 没有任何标志能区分
+           「用户按了 Alt+F4」和「程序自己在退」。而在退出流程里弹模态框，
+           那个框永远等不到回答：程序就**卡死在那里退不出去**。
+           实测：改完代码直接 QApplication.quit()，程序停在
+           「要保存吗？」上不动，事件循环再也不退出。
+           所以一律用**非模态**的确认框（QMessageBox.open()）。
+
+        2. 绝不能 事件.ignore()。程序 quit() 时，closeEvent 里 ignore() 会
+           **把整个退出流程卡住** —— 实测（最小复现：closeEvent 里只写
+           事件.ignore()）应用.quit() 之后事件循环再也不返回。
+           Qt 把 quit() 实现成「给所有顶层窗口发关闭请求」，
+           任何一个窗口拒绝关闭，退出就停在那里。
+           安全的做法：先 accept() 让窗口关掉，**然后**再弹非模态框；
+           用户点「取消」就把窗口重新 show() 回来。
+        """
+        # 没有未保存的改动 → 直接关，不用打扰用户
+        if not any(编.已改 for 编 in self.文档集):
+            self._收尾退出()
+            事件.accept()
+            return
+
+        # 有未保存的改动 → 先让窗口关掉（accept），再弹非模态框问。
+        # 不能 ignore()：那会把程序自己的 quit() 也卡住。
+        事件.accept()
+        self._收尾退出()
+        if getattr(self, "_关窗确认中", False):
+            return          # 已经在问了，别再弹第二个
+        self._关窗确认中 = True
+        self._问要不要保存()
+
+    def _问要不要保存(self):
+        """非模态地问「要不要保存」，答完再决定关不关。
+
+        为什么不用 QMessageBox.question：那是模态的，会开自己的事件循环。
+        在 closeEvent 里调它会和外层的退出流程抢事件循环 —— 程序卡死。
+        这里用 QMessageBox 实例 + open()（非模态），完事再关掉。
+
+        用户选「取消」时把窗口重新显示出来 —— 刚才为了不卡住退出流程
+        已经 accept() 让它关上了。
+        """
+        待处理 = [编 for 编 in self.文档集 if 编.已改]
+        if not 待处理:
+            self._关窗确认中 = False
+            self._真正关窗()
+            return
+
+        编 = 待处理[0]
+        框 = QMessageBox(self)
+        框.setWindowTitle("未保存的修改")
+        框.setText("「%s」还没保存，要保存吗？" % self._文件名(编))
+        框.setIcon(QMessageBox.Question)
+        框.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        框.setDefaultButton(QMessageBox.Save)
+        框.button(QMessageBox.Save).setText("保存")
+        框.button(QMessageBox.Discard).setText("不保存")
+        框.button(QMessageBox.Cancel).setText("取消")
+
+        def 拉回来():
+            """用户反悔了 —— 把窗口重新显示出来。"""
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+        def 选好了(答):
+            框.deleteLater()
+            if 答 == QMessageBox.Cancel:
+                self._关窗确认中 = False
+                拉回来()
+                return
+            if 答 == QMessageBox.Save and not self.保存(编):
+                self._关窗确认中 = False
+                拉回来()
+                return
+            # 这一份处理完了，接着问下一份。
+            # **必须延迟到下一轮事件循环**，不能在这里直接递归调 ——
+            # 这里还在那个确认框自己的事件循环里，直接再 open() 一个框
+            # 会形成嵌套的模态/非模态循环，退出流程就卡在里面出不来。
+            # 实测（冒烟测试）就是这样挂死的：栈上是
+            #   收 → closeEvent → _问要不要保存 → 选好了 → _问要不要保存
+            self._关窗确认中 = False
+            QTimer.singleShot(0, self._问要不要保存)
+
+        框.finished.connect(选好了)
+        框.open()
+        self._关窗框 = 框
+
+    def _真正关窗(self):
+        """确认完了：收尾并关掉窗口。"""
+        self._收尾退出()
+        self._正在退出 = True
+        self.close()
 
     # ================= 拖放 =================
 

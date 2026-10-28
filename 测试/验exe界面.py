@@ -13,7 +13,7 @@ exe = os.path.join(这里, "dist", "核工坊Qt.exe")
 print("已启动 pid=%d，轮询等窗口出现…" % 程序.pid)
 
 
-def 找窗口():
+def 找窗口(排除标题=None):
     try:
         import ctypes
         from ctypes import wintypes
@@ -32,10 +32,26 @@ def 找窗口():
             return True
 
         用户.EnumWindows(回调, 0)
-        return [t for t in 标题们 if "核工坊" in t]
+        找到 = [t for t in 标题们 if "核工坊" in t]
+        if 排除标题:
+            找到 = [t for t in 找到 if t not in 排除标题]
+        return 找到
     except Exception as e:  # noqa: BLE001
         print("查窗口失败:", e)
         return []
+
+
+# 启动**之前**先记下已经开着的核工坊窗口。
+#
+# 为什么必须排掉它们：以前测试只按「有没有标题含核工坊的窗口」判断成功，
+# 于是别处残留的孤儿进程（调试时手开的、上次测试没杀干净的）
+# 会让测试**立刻通过**——实测踩过：新 exe 还在解包，测试 0.0 秒就报
+# 「启动耗时 0.0 秒」「GUI exe 正常启动」，而找到的其实是 14:38 就开着的
+# 一个旧版本窗口（标题写着 v0.0.13，内核已经是 0.1.4）。
+# 这种「测了个假的成功」比失败更危险。
+现成 = set(找窗口())
+if 现成:
+    print("注意：启动前已存在 %d 个核工坊窗口，将在比对时排除：%r" % (len(现成), sorted(现成)))
 
 
 # 不能固定睡几秒就去找窗口：单文件 exe 要把 107MB 解包到临时目录，
@@ -48,7 +64,7 @@ while time.time() < 截止:
     if 程序.poll() is not None:
         print("!! 进程提前退出，退出码 %s" % 程序.returncode)
         break
-    目标 = 找窗口()
+    目标 = 找窗口(排除标题=现成)
     if 目标:
         break
     time.sleep(0.4)

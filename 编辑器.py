@@ -1148,6 +1148,25 @@ class 编辑器(QPlainTextEdit):
         return None
 
     def 切换注释(self):
+        """给选中的行加/去注释。
+
+        两条硬规矩 —— 破坏代码的两条路：
+
+        1. **字符串里的内容不能动**。多行三引号串的中间几行在语法上是
+           字符串的一部分，在那里插一个「核核 」会直接改掉程序的输出。
+           实测：
+               核说(\"\"\"第一行
+               # 井号行
+               第三行\"\"\")
+           切一次就变成「核核 第三行\"\"\"」—— 程序输出当场变了。
+           所以要先问内核：这个位置是不是在字符串里。
+
+        2. **已经是注释的行不要套第二层**。「核核 已有」再加一次会变成
+           「核核 核核 已有」，之后再也去不掉。
+
+        注释前缀统一用「核核 」（核语言自己的写法），不再按行混用 # ——
+        同一个文件里有的行是 #、有的行是 核核，来回切注释就会漂移。
+        """
         光标 = self.textCursor()
         起 = self.document().findBlock(光标.selectionStart()).blockNumber()
         止 = self.document().findBlock(光标.selectionEnd()).blockNumber()
@@ -1155,13 +1174,29 @@ class 编辑器(QPlainTextEdit):
         有内容 = [b for b in 块们 if b.text().strip()]
         if not 有内容:
             return
-        前缀们 = [self._取注释前缀(b.text()) for b in 有内容]
+        # 先算每一行「哪些字符在字符串里」。
+        # 多行三引号串会跨块，所以要按块序号记住「上一块结束时字符串还没闭合」。
+        串行 = self._标出字符串的块(块们)
+        前缀们 = [
+            None if 串行.get(b.blockNumber()) else self._取注释前缀(b.text())
+            for b in 有内容
+        ]
+        # 全注释 = 每一行都**已经是注释行**。
+        # 以前只判「全是同一种前缀」，于是
+        #   核说(1)          ← 代码
+        #   核核 已有         ← 已经是注释
+        # 这种混合块会被当成「要加注释」，给已经有注释的那行**再加一层** ——
+        # 变成「核核 核核 已有」，第二次切换又只去掉一个，注释再也去不掉。
         全注释 = all(p is not None for p in 前缀们)
         游标 = self.textCursor()
         游标.beginEditBlock()
         for 块 in 块们:
             文 = 块.text()
             if not 文.strip():
+                continue
+            编号 = 块.blockNumber()
+            if 编号 in 串行:
+                # 这一行在字符串里：一个字符都不能动
                 continue
             缩进 = len(文) - len(文.lstrip())
             体 = 文[缩进:]
@@ -1183,15 +1218,48 @@ class 编辑器(QPlainTextEdit):
                 游.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
                 游.insertText(新文)
             else:
-                # 加注释：一律用核语言的「核核 」。
-                # 这一行本身已经是英文 # 注释的，保持「# 」不动；
-                # 否则统一用「核核 」—— 规则简单可预期，
-                # 不会出现「同一个文件里有的行是 #、有的行是 核核」的摇摆。
-                用什么 = "# " if 体.startswith("#") else "核核 "
+                # 已经是注释的行不动 —— 再套一层就再也去不掉了。
+                if self._取注释前缀(体) is not None:
+                    continue
                 游.movePosition(QTextCursor.StartOfBlock)
                 游.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, 缩进)
-                游.insertText(用什么)
+                游.insertText("核核 ")
         游标.endEditBlock()
+
+    def _标出字符串的块(self, 块们):
+        """返回 {块号: 该块是否在字符串里}。
+
+        用内核自己的扫描器（核.扫描行），跨块的三引号串靠块状态接续 ——
+        与语法高亮、转译器用的是同一套判定。
+        """
+        结果 = {}
+        起始 = None
+        核 = self.主窗.内核
+        for 块 in 块们:
+            文本 = 块.text()
+            串区, 注释起, 未闭合 = 核.扫描行(文本, 起始)
+            if 未闭合:
+                起始 = 未闭合
+                结果[块.blockNumber()] = True
+                continue
+            起始 = None
+            if 串区:
+                # 这一行有字符串，但只有**字符串之外**的部分才能加注释。
+                # 单行字符串独占一行时（整行就是字符串）也不能动。
+                体 = 文本.lstrip()
+                if 注释起 >= 0:
+                    # 有注释：注释之前有字符串吗？
+                    前面的串 = [区 for 区 in 串区 if 区[1] <= 注释起]
+                else:
+                    前面的串 = 串区
+                if 前面的串 and not 文本[:前面的串[0][0]].strip():
+                    # 整行从字符串开始 —— 加注释会把字符串封在注释里
+                    结果[块.blockNumber()] = True
+                elif 前面的串:
+                    # 字符串前面有代码（如 核说("...")）：只能动字符串**之后**的部分，
+                    # 太细了，索性整行不动 —— 宁可少注释一行，也不能改坏代码。
+                    结果[块.blockNumber()] = True
+        return 结果
 
     # —— 查找 ——
 

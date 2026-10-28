@@ -24,7 +24,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.13"
+版本 = "0.1.4"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -620,14 +620,25 @@ class 未定义报告:
             行集.append(
                 "%s\t%s\t%d\t%s\t%s" % (key[0], key[1], e["次数"], e["首次"], e["最近"])
             )
+        临时 = self.路径 + ".tmp"
         try:
             目录 = os.path.dirname(os.path.abspath(self.路径))
             if 目录 and not os.path.isdir(目录):
                 os.makedirs(目录, exist_ok=True)
-            with open(self.路径, "w", encoding="utf-8", newline="\n") as f:
+            # 原子写：先写临时文件再 os.replace。
+            # 这份清单是用户「核语言还缺什么」的长期积累，写到一半崩了
+            # 就全没了 —— 而清单的价值恰恰在积累。
+            with open(临时, "w", encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(行集) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(临时, self.路径)
         except OSError:
-            pass
+            try:
+                if os.path.exists(临时):
+                    os.remove(临时)
+            except OSError:
+                pass
 
 
 #: 同一个清单文件只留一个实例，见 取报告
@@ -1534,10 +1545,38 @@ def 转译文件(路径, 输出路径=None):
     finally:
         报告.保存()
     if 输出路径:
+        # 防呆：输出路径和源文件是同一个 —— 那会把用户的 .xht 源码
+        # 覆盖成转译后的 Python，源码就没了（实测确实会这样）。
+        # 这种时候要求显式加 --覆盖，表示用户真要这么干。
+        同文件 = False
         try:
-            with open(输出路径, "w", encoding="utf-8", newline="\n") as f:
+            同文件 = os.path.exists(输出路径) and os.path.samefile(路径, 输出路径)
+        except OSError:
+            同文件 = os.path.normcase(os.path.abspath(路径)) == os.path.normcase(
+                os.path.abspath(输出路径)
+            )
+        if 同文件 and "--覆盖" not in (sys.argv[1:] or []):
+            print(
+                "输出路径就是源文件本身：这会把 %s 的源码覆盖成转译后的 Python。\n"
+                "        确实要这么做，请加 --覆盖。" % 路径,
+                file=sys.stderr,
+            )
+            return 2
+        临时 = 输出路径 + ".tmp"
+        try:
+            # 原子写：`-o` 的目标往往就是用户自己的文件（也可能就是
+            # 源文件本身！），写到一半崩了不能把原文件弄没。
+            with open(临时, "w", encoding="utf-8", newline="\n") as f:
                 f.write(译)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(临时, 输出路径)
         except OSError as e:
+            try:
+                if os.path.exists(临时):
+                    os.remove(临时)
+            except OSError:
+                pass
             print("写不出文件：%s（%s）" % (输出路径, e.strerror or e), file=sys.stderr)
             return 2
         print("已写出：%s" % 输出路径)
