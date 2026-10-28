@@ -1550,6 +1550,44 @@ class 主窗(QMainWindow):
                 self._轮询.stop()
                 self._轮询 = None
 
+    @staticmethod
+    def _杀进程树(进程):
+        """结束子进程**以及它的整棵子进程树**。
+
+        为什么不能只用 进程.kill()：打包成 exe 之后，运行用户程序的命令是
+
+            [核工坊Qt.exe, "--内核", 用户程序.xht"]
+
+        也就是让 exe **自我重新调用**。PyInstaller 的单文件 exe 是
+        「引导进程 + 真正跑应用的子进程」两层结构 ——
+        kill() 只杀得掉引导进程，真正在跑用户代码的那个子进程会变成孤儿：
+        它继续跑（死循环、无限输出），用户按了「停止」却发现程序没停，
+        而且那个孤儿还**锁着 exe 文件**，导致下次打包失败。
+        （测试/验exe界面.py 早就踩过同一个坑，用 taskkill /T 才解决。）
+
+        开发模式（python.exe 跑 核.py）只有一层，kill() 就够；
+        但从 exe 里运行时必须用 taskkill /T 连整棵树一起杀。
+        这里统一按「打包模式优先用 taskkill，失败再退回 kill」处理。
+        """
+        码 = None
+        if sys.platform == "win32":
+            try:
+                r = subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(进程.pid)],
+                    capture_output=True,
+                    timeout=15,
+                    creationflags=版本控制.无窗口标志(),
+                )
+                码 = r.returncode
+            except (OSError, subprocess.SubprocessError):
+                码 = None
+        if 码 != 0:
+            # taskkill 不可用 / 进程已经没了 / 非 Windows —— 退回普通 kill
+            try:
+                进程.kill()
+            except OSError:
+                pass
+
     def _收尾(self):
         进程 = self.进程
         if 进程 is None:
@@ -1568,10 +1606,7 @@ class 主窗(QMainWindow):
             if not 静默:
                 self.状态("当前没有在运行的程序")
             return
-        try:
-            self.进程.kill()
-        except OSError:
-            pass
+        self._杀进程树(self.进程)
         self._收尾()
         if self._轮询:
             self._轮询.stop()

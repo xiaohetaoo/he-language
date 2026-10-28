@@ -294,6 +294,44 @@ for 名, t in (
         "原=%r 两次后=%r" % (剥注释(t), 剥注释(两次)),
     )
 
+# ---------------------------------------------------------------------------
+print("== 七、「停止」必须真的把子进程杀掉 ==")
+# 打包成 exe 之后，运行用户程序的命令是 [核工坊Qt.exe, "--内核", 文件]
+# —— 让 exe 自我重新调用。PyInstaller 单文件 exe 是「引导进程 + 应用子进程」
+# 两层，只 kill() 引导进程的话，真正跑用户代码的那个会**变成孤儿继续跑**，
+# 用户按了停止却发现程序没停，孤儿还锁着 exe 让下次打包失败。
+import subprocess as _sp  # noqa: E402
+import time as _time  # noqa: E402
+
+窗4 = 核工坊Qt.主窗()
+目录4 = tempfile.mkdtemp(prefix="核杀进程_")
+死循环 = os.path.join(目录4, "死循环.xht")
+with open(死循环, "w", encoding="utf-8") as f:
+    f.write("核导入 time\n核循环若 核对：\n    time.sleep(0.05)\n")
+e4 = 窗4.打开(死循环)
+应用.processEvents()
+窗4.运行()
+for _ in range(80):
+    应用.processEvents()
+    _time.sleep(0.05)
+    if 窗4.进程 is not None:
+        break
+if 窗4.进程 is None:
+    检("程序真的跑起来了", False, "进程没起来")
+else:
+    检("程序真的跑起来了", True)
+    pid = 窗4.进程.pid
+    窗4.停止()
+    应用.processEvents()
+    _time.sleep(1.2)
+    r = _sp.run(
+        ["tasklist", "/FI", "PID eq %d" % pid],
+        capture_output=True, text=True, errors="replace",
+    )
+    检("停止后子进程真的没了", str(pid) not in r.stdout, "tasklist 输出还含 pid %d" % pid)
+    检("停止后 self.进程 已清空", 窗4.进程 is None)
+shutil.rmtree(目录4, ignore_errors=True)
+
 shutil.rmtree(临时, ignore_errors=True)
 shutil.rmtree(目录, ignore_errors=True)
 

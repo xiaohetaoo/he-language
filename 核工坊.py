@@ -2527,9 +2527,24 @@ class 主窗口:
             目录 = os.path.dirname(文档.文件路径)
             if 目录 and not os.path.isdir(目录):
                 os.makedirs(目录, exist_ok=True)
-            with open(文档.文件路径, "w", encoding="utf-8", newline="\n") as f:
-                f.write(文档.取文本())
+            # 原子写：先写临时文件再 os.replace。
+            # 直接 open(路径, "w") 是先把原文件清空再写 —— 写到一半崩了
+            # （磁盘满、断电、杀进程），用户的代码就没了。
+            # Qt 版（0.1.4）已经这么改了，这个旧版保留可回退，不能留同一个洞。
+            文本 = 文档.取文本()
+            路径 = 文档.文件路径
+            临时 = 路径 + ".核工坊.tmp"
+            with open(临时, "w", encoding="utf-8", newline="\n") as f:
+                f.write(文本)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(临时, 路径)
         except OSError as e:
+            try:
+                if os.path.exists(文档.文件路径 + ".核工坊.tmp"):
+                    os.remove(文档.文件路径 + ".核工坊.tmp")
+            except OSError:
+                pass
             self.状态("保存失败：%s" % e)
             self.控制台追加("保存失败：%s\n" % e, "错误")
             if 弹窗:
@@ -2556,7 +2571,17 @@ class 主窗口:
         )
         if not 路径:
             return False
-        文档.文件路径 = 规范化路径(路径)
+        路径 = 规范化路径(路径)
+        # 目标已存在时再确认一次 —— 覆盖是破坏性的。
+        # asksaveasfilename 一般会自己问，但那是系统对话框的实现细节，
+        # 不能只靠它。Qt 版（0.1.4）加了同样的防护，这里跟上。
+        if os.path.exists(路径) and 路径 != 文档.文件路径:
+            if not messagebox.askyesno(
+                "确认覆盖", "“%s”已经存在，要覆盖吗？" % os.path.basename(路径),
+                parent=self.根,
+            ):
+                return False
+        文档.文件路径 = 路径
         ok = self.保存(文档, 弹窗=弹窗)
         if ok:
             self._加最近(文档.文件路径)
