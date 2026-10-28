@@ -233,25 +233,33 @@ def 请求(方法, 路径, 令牌, 数据=None, 原始=None, 类型=None, 超时
 
 
 def 读发布说明(版本号):
-    """取 版本记录.md 里该版本的段落作为 Release 说明。"""
+    """取 版本记录.md 里该版本的段落作为 Release 说明。
+
+    优先取「## X.Y.Z 发布说明」（给人看的精简版）；
+    没有这一段时退回「## X.Y.Z 详细说明」（开发过程记录，往往很长）。
+    Release 正文读者是用户，不该直接糊一份开发笔记上去。
+    """
     路径 = os.path.join(根目录, "版本记录.md")
-    要点 = []
-    if os.path.exists(路径):
-        with open(路径, encoding="utf-8") as f:
-            行集 = f.readlines()
+    if not os.path.exists(路径):
+        return "详见仓库 README.md 与 说明.md。"
+    with open(路径, encoding="utf-8") as f:
+        行集 = f.readlines()
+
+    def 取段(标题):
+        要点 = []
         收录 = False
         for 行 in 行集:
-            if 行.startswith("## %s 详细说明" % 版本号):
+            if 行.startswith("## %s" % 标题):
                 收录 = True
                 continue
             if 收录 and 行.startswith("## "):
                 break
             if 收录:
                 要点.append(行.rstrip())
-    正文 = "\n".join(要点).strip()
-    if not 正文:
-        正文 = "详见仓库 README.md 与 说明.md。"
-    return 正文
+        return "\n".join(要点).strip()
+
+    正文 = 取段("%s 发布说明" % 版本号) or 取段("%s 详细说明" % 版本号)
+    return 正文 or "详见仓库 README.md 与 说明.md。"
 
 
 def 打源码包(输出):

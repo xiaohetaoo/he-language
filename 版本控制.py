@@ -40,15 +40,20 @@ def 找git():
     return None
 
 
-def _无窗口标志():
+def 无窗口标志():
     """Windows 上别弹出黑色控制台窗口。
 
-    GUI 程序里调 subprocess 若不设这个标志，每次跑 git 都会闪一下 cmd 窗口，
-    用户会以为程序在乱开窗口。
+    GUI 程序里调 subprocess 若不设这个标志，每次起子进程都会闪一下 cmd
+    窗口，用户会以为程序在乱开窗口。核工坊也用这一份（跑用户程序时的
+    Popen）—— 以前只在 git 调用上修过，运行用户程序那处漏了。
     """
     if sys.platform != "win32":
         return 0
     return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+#: 旧名，保留给可能还在引用的地方
+_无窗口标志 = 无窗口标志
 
 
 def _跑(目录, 参数):
@@ -63,7 +68,7 @@ def _跑(目录, 参数):
             命令,
             capture_output=True,
             timeout=超时,
-            creationflags=_无窗口标志(),
+            creationflags=无窗口标志(),
         )
     except (OSError, subprocess.SubprocessError):
         return None, ""
@@ -127,6 +132,13 @@ def 状态(目录):
             路径 = 行[3:] if len(行) > 3 else ""
             if 路径.startswith('"') and 路径.endswith('"'):
                 路径 = 路径[1:-1]
+            # 重命名/复制写成 "旧名 -> 新名"（v1 不带 -z 的固定格式）。
+            # 原样存下来的话，双击打开会拿 目录/「旧名 -> 新名」去当路径，
+            # 必然找不到文件。只留新名 —— 那是现在真实存在的那个。
+            if "R" in 码位 or "C" in 码位:
+                旧名, 箭头, 新名 = 路径.partition(" -> ")
+                if 箭头 and 新名:
+                    路径 = 新名
             改动.append((码位, 路径))
         结果["改动"] = 改动
 

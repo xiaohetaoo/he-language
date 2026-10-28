@@ -18,12 +18,13 @@ import codeop
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.0.12"
+版本 = "0.0.13"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -357,8 +358,53 @@ def 规范化单字(c):
     return n if len(n) == 1 else c
 
 
+def _转义引号(内容, 引号):
+    """把内容里**未转义**的 引号 加上反斜杠。
+
+    已经写成 \\" 的不能碰（再转一次就从「双引号」变成「反斜杠 + 双引号」），
+    所以不能简单 replace。
+    """
+    结果 = []
+    k, n = 0, len(内容)
+    while k < n:
+        ch = 内容[k]
+        if ch == "\\" and k + 1 < n:
+            结果.append(内容[k:k + 2])
+            k += 2
+            continue
+        if ch == 引号:
+            结果.append("\\" + ch)
+        else:
+            结果.append(ch)
+        k += 1
+    return "".join(结果)
+
+
 def 是标识符字符(c):
     return c == "_" or c.isalnum() or (ord(c) > 127 and c.isidentifier())
+
+
+def _串前缀(s, i):
+    """s[i] 是引号时，返回 (前缀, 前缀起点)。
+
+    前缀是 f/r/b/u 的组合（最多两个字母）或中文的「核」。
+    前缀前面若紧跟标识符字符，就算不上前缀（x'abc' 里的 abc 不是字符串）。
+    """
+    if i > 0 and s[i - 1] == "核":
+        return "核", i - 1
+    k = i
+    while k > 0 and i - k < 2 and s[k - 1] in "rRbBuUfF":
+        k -= 1
+    前缀 = s[k:i]
+    if 前缀 and k > 0 and 是标识符字符(s[k - 1]):
+        return "", i
+    return 前缀, k
+
+
+def _是f串前缀(s, i):
+    """s[i] 处的字符串字面量是不是 f-string。"""
+    前缀, _ = _串前缀(s, i)
+    return 前缀 == "核" or "f" in 前缀.lower()
 
 
 def 词左界(s, i):
@@ -402,23 +448,42 @@ def 规范化源码(s):
             # 之前用 规范化单字(s[k]) 判断，而 NFKC/别名会把 「」『』 都归一成
             # 普通的 "，于是字符串内容里的「」被当成结束符，内容被悄悄改写
             # —— 与「字符串内容保持原样」的承诺相违。
-            if c in ("\u201c", "\u300c", "\u300e"):
-                收尾集 = {"\u201d", "\u300d", "\u300f"}
-            elif c in ("\u201d", "\u300d", "\u300f"):
-                收尾集 = {"\u201d", "\u300d", "\u300f"}
-            elif c in ("\u2018",):
-                收尾集 = {"\u2019"}
-            elif c in ("\u2019",):
-                收尾集 = {"\u2019"}
-            else:
-                收尾集 = {c}
+            #
+            # 左右引号要**各自配对**：「 只由 」收尾，『 只由 』收尾。
+            # 以前是「」『』“” 六个字符共用一个收尾集，于是
+            #   核说（“成绩里没有「数学」这一项”）
+            # 里的 」 会被当成外层 “ 的收尾符，字符串从中间断开，
+            # 产物落成 print("成绩里没有「数学"这一项"） —— 编译不过，
+            # 而且报错完全指不到真正的原因。中文里在引号中再嵌一层「」
+            # 是很常见的写法，不能这样牺牲。
+            # 反过来，只写了右引号当开头（“ 用 ” 收尾、」用 」收尾）的情形
+            # 仍然放宽，因为那多半是「只打了一边」的手误，能容就容。
+            收尾集 = 引号收尾.get(c, {c})
             结果.append(引号)
             k = i + len(引号)
             内容起 = k
+            # 这个字符串是不是 f-string（前缀里有 f，或者中文的 核"…"）。
+            # 是的话，{…} 字段要整段原样跳过 —— 字段里可以再放字符串，
+            # 而字符串里可以出现 ” ’ 」 之类看起来像收尾符的字符。
+            # 不跳的话外层的收尾判断会在字段内部那个引号上提前结束，
+            # 把字段后半段当普通代码去归一化：实测
+            # 核说（核“外层{核“内层”}结束”） 里的内层引号就是这样被
+            # 折成 ASCII 半角，产物落成 f"外层{核"内层"}结束"，编译不过。
+            # 跳过之后，字段内容由 处理f内容 → 转译(表达式) 再单独处理一次，
+            # 该归一化的照样归一化。
+            是f串 = _是f串前缀(s, i)
             while k < n:
                 if s[k] == "\\":
                     k += 2
                     continue
+                if 是f串 and s[k] == "{":
+                    if s.startswith("{{", k):
+                        k += 2
+                        continue
+                    字段止 = _找字段结束(s, k)
+                    if 字段止 >= 0:
+                        k = 字段止 + 1
+                        continue
                 if len(引号) == 1:
                     if s[k] in 收尾集:
                         break
@@ -430,7 +495,15 @@ def 规范化源码(s):
                 ):
                     break
                 k += 1
-            结果.append(s[内容起:k])
+            内容 = s[内容起:k]
+            if 引号 != c and len(引号) == 1:
+                # 「…」/“…”/‘…’ 被折成 ASCII 引号时，内容里原本完全合法的
+                # 同种 ASCII 引号必须转义，否则产物不是合法 Python：
+                #   核说（「他说"你好"」） → print("他说"你好"")
+                # 内容本身「保持原样」的承诺仍然成立 —— 运行时拿到的字符
+                # 一个没变，变的只是源码里的写法。
+                内容 = _转义引号(内容, 引号)
+            结果.append(内容)
             if k < n:
                 结果.append(引号)
                 k += len(引号)
@@ -512,6 +585,30 @@ class 未定义报告:
     def 条数(self):
         return len(self.条目)
 
+    def 并入快照(self, 快照, 已计):
+        """把一次「整份重译」的结果并进来，返回新的已计表。
+
+        交互模式每追加一行就把**整个缓冲**重译一遍。如果一直用同一个
+        报告实例，同一处写法会被重复计数 —— 实测缓冲里 ascii 出现 2 次
+        被记成 3 次，跨行块膨胀得更多。
+        这里按「这次快照的计数 − 上次快照已经计入的计数」补差，
+        所以重译多少次，最终次数都等于源码里真实出现的次数。
+        """
+        新计 = {}
+        for key, e in 快照.条目.items():
+            次 = e["次数"]
+            新计[key] = 次
+            差 = 次 - 已计.get(key, 0)
+            if 差 <= 0:
+                continue
+            现 = self.条目.get(key)
+            if 现 is None:
+                self.条目[key] = {"次数": 差, "首次": e["首次"], "最近": e["最近"]}
+            else:
+                现["次数"] += 差
+                现["最近"] = e["最近"]
+        return 新计
+
     def 保存(self):
         if not self.路径:
             return
@@ -531,6 +628,31 @@ class 未定义报告:
                 f.write("\n".join(行集) + "\n")
         except OSError:
             pass
+
+
+#: 同一个清单文件只留一个实例，见 取报告
+_报告集 = {}
+_报告锁 = threading.Lock()
+
+
+def 取报告(路径):
+    """按路径取一个**共享的** 未定义报告。
+
+    为什么必须共享：`核 运行` 和核工坊的「检查语法」(F9) 会各自 new 一个
+    实例，而每个实例都是「构造时读一次文件、保存时整份写回」。同一文件
+    先后落盘时，后写的那份会把先写的新增记录整段冲掉 —— 实测按 F9 记下
+    的写法，紧接着运行一次就没了。共享同一个实例后，两边都只是往同一份
+    字典里加条目，谁先谁后都不会互相覆盖。
+    """
+    if not 路径:
+        return 未定义报告(None)
+    键 = os.path.normcase(os.path.abspath(路径))
+    with _报告锁:
+        报 = _报告集.get(键)
+        if 报 is None:
+            报 = 未定义报告(路径)
+            _报告集[键] = 报
+        return 报
 
 
 def 默认报告路径(源文件=None):
@@ -553,7 +675,37 @@ def 默认报告路径(源文件=None):
 # 四、转译器
 # ---------------------------------------------------------------------------
 
-_字符串起点 = re.compile(r"(?:(?P<py>[rRbBuUfF]{1,2})|(?P<he>核))?(?P<q>'''|\"\"\"|'|\")")
+_字符串起点 = re.compile(
+    r"(?:(?P<py>[rRbBuUfF]{1,2})|(?P<he>核))?"
+    # 全角/中文引号也要认：规范化源码 会把「」『』“”‘’ 折成普通引号，
+    # 内核拿它们当字符串边界。高亮若只认 ASCII 引号，同一段文字
+    # 内核说是字符串、高亮说是代码 —— 两边口径必须一致。
+    r"(?P<q>'''|\"\"\"|'|\"|\u300c|\u300d|\u300e|\u300f|\u201c|\u201d|\u2018|\u2019)"
+)
+
+#: 引号的收尾字符集。中文引号左右**各自配对**：「 只由 」收尾，
+#: 『 只由 』收尾，绝不能六个字符共用一个集合 —— 那样
+#:   核说（“成绩里没有「数学」这一项”）
+#: 里的 」 会被当成外层 “ 的收尾符，字符串从中间断开、产物编译不过。
+#: 这一份必须与 规范化源码 用的收尾集**逐字一致**：高亮与翻译
+#: 对同一段文字的说法不能有分歧。
+#: 普通 ASCII 引号只认自己；只写了右引号当开头的情形放宽一些，
+#: 因为那多半是「只打了一边」的手误。
+引号收尾 = {
+    '"': {'"'},
+    "'": {"'"},
+    "\u201c": {"\u201d"},                       # “ → ”
+    "\u201d": {"\u201d", "\u300d", "\u300f"},   # ” （手误只打右边）
+    "\u2018": {"\u2019"},                       # ‘ → ’
+    "\u2019": {"\u2019"},                       # ’
+    "\u300c": {"\u300d"},                       # 「 → 」
+    "\u300d": {"\u300d", "\u300f", "\u201d"},   # 」
+    "\u300e": {"\u300f"},                       # 『 → 』
+    "\u300f": {"\u300f", "\u201d"},             # 』
+}
+
+#: NFKC 会把全角 ＃ 折成 #，所以高亮也要认它。
+注释引导 = ("#", "\uff03")
 
 _数字 = re.compile(
     r"""
@@ -569,15 +721,75 @@ _数字 = re.compile(
 )
 
 def _找引号结束(s, j, 引号):
-    k, n = j, len(s)
+    """从 j 起找 引号 的收尾位置；找不到返回 len(s)。
+
+    三引号要求三个相同字符；单字符引号按 引号收尾 表认多种收尾符
+    （「」『』“” 是配对的，收尾未必与开头同字）。
+    """
+    n = len(s)
+    收尾 = 引号收尾.get(引号[0], {引号[0]})
+    k = j
     while k < n:
         if s[k] == "\\":
             k += 2
             continue
-        if s.startswith(引号, k):
+        if len(引号) == 1:
+            if s[k] in 收尾:
+                return k
+        elif s.startswith(引号, k):
             return k
         k += 1
     return n
+
+
+def 扫描行(s, 起始引号=None):
+    """一次扫完一行，给出字符串区间、注释起点、跨行未闭合的三引号。
+
+    为什么必须一次扫完：字符串里可以写「核核」，注释里可以写引号，
+    分几遍各自用正则找必然打架 —— 0.0.12 实测到的
+    「字符串内容被关键字色覆盖」「注释里的引号被当成字符串开头」
+    都是这么来的。左到右逐字符扫，谁先出现谁优先，语义唯一，
+    而且与 转译器 的扫描次序一致。
+
+    起始引号 非空表示本行开头就已经处在某个三引号串内部
+    （由上一行的块状态传下来）。
+
+    返回 (字符串区间列表, 注释起点或 -1, 未闭合的三引号或 None)。
+    """
+    区间 = []
+    i, n = 0, len(s)
+    if 起始引号:
+        结束 = _找引号结束(s, 0, 起始引号)
+        if 结束 >= n:
+            区间.append((0, n))
+            return 区间, -1, 起始引号
+        止 = min(结束 + len(起始引号), n)
+        区间.append((0, 止))
+        i = 止
+    while i < n:
+        c = s[i]
+        if c in 注释引导:
+            return 区间, i, None
+        if s.startswith("核核", i) and 词左界(s, i) and 词右界(s, i + 2):
+            return 区间, i, None
+        m = _字符串起点.match(s, i)
+        if m:
+            前缀 = m.group("py") or m.group("he")
+            # 前缀后面必须不是标识符字符（否则 x'abc' 里的 abc 不是字符串）
+            if not (前缀 and i > 0 and 是标识符字符(s[i - 1])):
+                引号 = m.group("q")
+                内容起 = m.end()
+                结束 = _找引号结束(s, 内容起, 引号)
+                if 结束 >= n and len(引号) == 3:
+                    # 三引号在本行没关闭 —— 剩下的都是字符串，交给下一块续
+                    区间.append((i, n))
+                    return 区间, -1, 引号
+                止 = min(结束 + len(引号), n)
+                区间.append((i, 止))
+                i = 止 if 止 > i else i + 1
+                continue
+        i += 1
+    return 区间, -1, None
 
 
 def 字符串区间(s):
@@ -587,25 +799,67 @@ def 字符串区间(s):
     否则会把字符串内容误当成注释/关键字染色。
     这里和转译器用同一套前缀与引号规则，保证两边说同样的话。
     """
-    区间 = []
-    i, n = 0, len(s)
-    while i < n:
-        m = _字符串起点.match(s, i)
-        if not m:
-            i += 1
+    return 扫描行(s)[0]
+
+
+def _找f串结束(s, j, 引号):
+    """f-string 的收尾位置；找不到返回 len(s)。
+
+    与 _找引号结束 的唯一区别：替换字段 {...} 整段跳过。
+    Python 3.12（PEP 701）允许字段里复用外层同款引号，所以
+
+        核说(核"外层{核"内层"}结束")
+
+    应当译成 f"外层{f"内层"}结束"。若还在字段里那个 " 上就判定字符串
+    结束，后半段就不再走字符串翻译，产物里留着生「核"」，
+    compile 只会报一句晦涩的 f-string: expecting '=' …。
+    """
+    n = len(s)
+    三 = len(引号) == 3
+    收尾 = 引号收尾.get(引号[0], {引号[0]})
+    k = j
+    while k < n:
+        c = s[k]
+        if c == "\\":
+            k += 2
             continue
-        # 前缀后面必须不是标识符字符（否则 x'abc' 里的 abc 不是字符串）
-        前缀 = m.group("py") or m.group("he")
-        if 前缀 and i > 0 and 是标识符字符(s[i - 1]):
-            i += 1
+        if c == "{":
+            if s.startswith("{{", k):
+                k += 2
+                continue
+            结束 = _找字段结束(s, k)
+            if 结束 < 0:
+                # 字段没闭合：当普通字符继续扫，让后面的报错更贴近用户写的那一行
+                k += 1
+                continue
+            k = 结束 + 1
             continue
-        引号 = m.group("q")
-        内容起 = m.end()
-        结束 = _找引号结束(s, 内容起, 引号)
-        止 = min(结束 + len(引号), n)
-        区间.append((i, 止))
-        i = 止 if 止 > i else i + 1
-    return 区间
+        if 三:
+            if s.startswith(引号, k):
+                return k
+        elif c in 收尾:
+            return k
+        k += 1
+    return n
+
+
+def _查串头(s, i):
+    """s[i:] 是否是一个字符串字面量的开头。是则返回 (前缀, 引号, 内容起)。
+
+    与 扫描行 / 尝试字符串 共用同一套判断（含「前缀后面不能紧跟标识符字符」），
+    免得三处各写一份再慢慢漂移。
+    """
+    m = _字符串起点.match(s, i)
+    if not m:
+        return None
+    py前缀 = m.group("py")
+    he前缀 = m.group("he")
+    前缀 = py前缀 or he前缀
+    if 前缀 and i > 0 and 是标识符字符(s[i - 1]):
+        return None
+    if he前缀:
+        return "f", m.group("q"), m.end()
+    return (py前缀 or ""), m.group("q"), m.end()
 
 
 def _找字段结束(s, i):
@@ -613,21 +867,13 @@ def _找字段结束(s, i):
     深度 = 0
     k, n = i + 1, len(s)
     while k < n:
-        c = s[k]
-        if c in ("'", '"'):
-            引号 = c
-            if s.startswith(c * 3, k):
-                引号 = c * 3
-            k += len(引号)
-            while k < n:
-                if s[k] == "\\":
-                    k += 2
-                    continue
-                if s.startswith(引号, k):
-                    k += len(引号)
-                    break
-                k += 1
+        # 字段里可以再放字符串，而字符串里可以再有 {…}（嵌套 f-string）。
+        # 交给 _跳过字符串 递归处理，层数不限。
+        串 = _跳过字符串(s, k)
+        if 串 > k:
+            k = 串
             continue
+        c = s[k]
         if c in "([{":
             深度 += 1
         elif c in ")}]":
@@ -636,6 +882,19 @@ def _找字段结束(s, i):
             深度 -= 1
         k += 1
     return -1
+
+
+def _跳过字符串(s, i):
+    """若 s[i:] 是字符串字面量，返回它之后的位置；否则返回 -1。"""
+    头 = _查串头(s, i)
+    if 头 is None:
+        return -1
+    前缀, 引号, 内容起 = 头
+    if "f" in 前缀.lower():
+        结束 = _找f串结束(s, 内容起, 引号)
+    else:
+        结束 = _找引号结束(s, 内容起, 引号)
+    return min(结束 + len(引号), len(s))
 
 
 def _切分字段(字段):
@@ -912,14 +1171,20 @@ class 转译器:
 
         引号 = m.group("q")
         内容起 = m.end()
-        结束 = _找引号结束(s, 内容起, 引号)
+        # f-string 的收尾要跳过 {…} 字段（字段里可能有同款引号的串）
+        结束 = _找f串结束(s, 内容起, 引号) if 是f串 else _找引号结束(s, 内容起, 引号)
+        闭合 = 结束 < len(s)
         内容 = s[内容起:结束]
 
         if 是f串:
             内容 = self.处理f内容(内容, self.行, self.列)
 
-        self.写(前缀 + 引号 + 内容 + 引号)
-        if 结束 < len(s):
+        # 引号没配上对时**不要**替用户补一个收尾引号。
+        # 以前无条件 self.写(前缀 + 引号 + 内容 + 引号)：
+        # 文件末尾写了一半的 x = "abc 会被悄悄变成合法的 x = "abc"，
+        # 用户拿到的是「凭空的字符串」而不是「字符串没闭合」的报错。
+        self.写(前缀 + 引号 + 内容 + (引号 if 闭合 else ""))
+        if 闭合:
             self.前进(s[i:结束 + len(引号)])
             self._新位置 = 结束 + len(引号)
         else:
@@ -988,6 +1253,36 @@ def 读源码(路径):
     return 数据.decode("utf-8", errors="replace")
 
 
+def _语法线索(原因):
+    """把 Python 的英文语法错误原文，翻译成一句「下一步该改哪儿」。
+
+    只认最常撞上的几条。没命中就返回空串，不硬凑。
+    """
+    原因 = 原因 or ""
+    if "unterminated string" in 原因 or "EOL while scanning string" in 原因:
+        return (
+            "这一行的引号没有配上对。字符串要用成对的引号包起来"
+            "（\"…\"  '…'  「…」  或 核\"…\"）；\n"
+            "        若本来只是想写说明，请把这一行改成用 核核 开头的注释。"
+        )
+    if "f-string: expecting" in 原因 or "f-string expression part" in 原因:
+        return (
+            "核\"…\" 是 f-string（里面 { } 会当成表达式算一遍）。\n"
+            "        只想原样输出花括号，请写成 {{ 和 }}；"
+            "想输出 { 或 } 之外的内容\n"
+            "        也要确认每个 { 都有配对的 }。"
+        )
+    if "unicode error" in 原因.lower():
+        return "转义写法（形如 \\x41）有问题，检查反斜杠后面的字符。"
+    if "invalid character" in 原因 or "invalid syntax" in 原因:
+        return (
+            "这一行有核语言还不认识、Python 也不认识的写法。\n"
+            "        对照表里没有的英文名字会被原样保留 ——"
+            "看看是不是拼错，或者用了没进对照表的写法。"
+        )
+    return ""
+
+
 def 显示语法错误(源码, 译, e, 文件名, 流=None):
     流 = 流 or sys.stderr
     行号 = e.lineno or 0
@@ -1000,10 +1295,11 @@ def 显示语法错误(源码, 译, e, 文件名, 流=None):
         流.write("  原文：%s\n" % 原文)
     if 译文 and 译文 != 原文:
         流.write("  转译：%s\n" % 译文)
-    流.write("  原因：%s\n" % (e.msg or e))
-    说明 = 异常说明.get(type(e).__name__)
-    if 说明:
-        流.write("  提示：%s\n" % 说明)
+    原因 = e.msg or str(e)
+    流.write("  原因：%s\n" % 原因)
+    提示 = _语法线索(原因) or 异常说明.get(type(e).__name__)
+    if 提示:
+        流.write("  提示：%s\n" % 提示)
     流.flush()
 
 
@@ -1171,14 +1467,35 @@ def 执行代码(代码, 源码, 文件名, 参数=None, 流=None):
     return 0
 
 
-def 运行文件(路径, 参数=None, 报告路径=None):
+def 路径问题(路径):
+    """路径不能用时返回一句中文说明；能用时返回空串。
+
+    三个入口（运行/检查/转译）都要先过这一关。以前只有 运行 查了
+    os.path.exists，检查与转译直接 读源码(路径) —— 路径写错就甩一段
+    FileNotFoundError 的英文 traceback 给用户；而三个入口都没拦目录，
+    「核 运行 例子」会得到 PermissionError。项目一直要求错误提示中文化，
+    这里补齐。
+    """
+    if not 路径:
+        return "没有给出文件路径。"
+    if os.path.isdir(路径):
+        return "「%s」是一个目录，不是 %s 源文件。" % (路径, 扩展名)
     if not os.path.exists(路径):
-        print("找不到文件：%s" % 路径, file=sys.stderr)
+        return "找不到文件：%s" % 路径
+    if not os.path.isfile(路径):
+        return "「%s」不是普通文件，打不开。" % 路径
+    return ""
+
+
+def 运行文件(路径, 参数=None, 报告路径=None):
+    问题 = 路径问题(路径)
+    if 问题:
+        print(问题, file=sys.stderr)
         return 2
     准备输出()
     准备输入()
     源码 = 读源码(路径)
-    报告 = 未定义报告(报告路径 or 默认报告路径(路径))
+    报告 = 取报告(报告路径 or 默认报告路径(路径))
     try:
         代码, _ = 编译源码(源码, 路径, 报告)
         if 代码 is None:
@@ -1189,8 +1506,12 @@ def 运行文件(路径, 参数=None, 报告路径=None):
 
 
 def 检查文件(路径):
+    问题 = 路径问题(路径)
+    if 问题:
+        print(问题, file=sys.stderr)
+        return 2
     源码 = 读源码(路径)
-    报告 = 未定义报告(默认报告路径(路径))
+    报告 = 取报告(默认报告路径(路径))
     try:
         代码, _ = 编译源码(源码, 路径, 报告)
     finally:
@@ -1202,15 +1523,23 @@ def 检查文件(路径):
 
 
 def 转译文件(路径, 输出路径=None):
+    问题 = 路径问题(路径)
+    if 问题:
+        print(问题, file=sys.stderr)
+        return 2
     源码 = 读源码(路径)
-    报告 = 未定义报告(默认报告路径(路径))
+    报告 = 取报告(默认报告路径(路径))
     try:
         译 = 转译(源码, 路径, 报告)
     finally:
         报告.保存()
     if 输出路径:
-        with open(输出路径, "w", encoding="utf-8", newline="\n") as f:
-            f.write(译)
+        try:
+            with open(输出路径, "w", encoding="utf-8", newline="\n") as f:
+                f.write(译)
+        except OSError as e:
+            print("写不出文件：%s（%s）" % (输出路径, e.strerror or e), file=sys.stderr)
+            return 2
         print("已写出：%s" % 输出路径)
     else:
         准备输出()
@@ -1249,10 +1578,12 @@ def 查看报告(路径=None):
 
 def 交互模式():
     报告路径 = os.path.join(os.getcwd(), 未定义文件名)
-    报告 = 未定义报告(报告路径)
+    报告 = 取报告(报告路径)
     全局 = {"__name__": "__main__"}
     编译命令 = codeop.CommandCompiler()
     缓冲 = []
+    # 缓冲每次重译都要重算一遍，不能直接往 报告 里累加 —— 见 并入快照
+    已计 = {}
     print("%s %s" % (程序名, 版本))
     print("交互模式：输入 核退出 结束\n")
     while True:
@@ -1267,19 +1598,27 @@ def 交互模式():
             continue
         缓冲.append(行)
         源 = "\n".join(缓冲)
+        # 每一轮都用一份临时快照：缓冲是「整份重译」，同一个实例会被重复计数
+        临时 = 未定义报告(None)
+        译 = 源
         try:
-            译 = 转译(源, "<交互>", 报告)
+            译 = 转译(源, "<交互>", 临时)
             代码 = 编译命令(译, "<交互>", "exec")
         except SyntaxError as e:
             显示语法错误(源, 译, e, "<交互>")
             缓冲 = []
+            已计 = {}
             continue
         except Exception as e:  # noqa: BLE001
             print("无法转译：%s" % e)
             缓冲 = []
+            已计 = {}
             continue
         if 代码 is None:
+            # 语句还不完整（比如刚写完 核若 …：），继续攒缓冲
+            已计 = 报告.并入快照(临时, 已计)
             continue
+        已计 = 报告.并入快照(临时, 已计)
         try:
             exec(代码, 全局)
         except SystemExit:
@@ -1287,6 +1626,7 @@ def 交互模式():
         except BaseException as e:  # noqa: BLE001
             显示运行错误(e, 源, "<交互>")
         缓冲 = []
+        已计 = {}
     报告.保存()
     return 0
 
@@ -1305,7 +1645,8 @@ def 交互模式():
   核 转译 文件.%(扩展)s       打印转译后的 Python 代码
   核 转译 文件.%(扩展)s -o 输出.py
   核 报告                     查看未定义清单
-  核 工坊                     打开图形界面（核工坊）
+  核 工坊                     打开图形界面（核工坊，Qt 版）
+  核 工坊旧                   打开旧界面（tkinter 版，功能停在 0.0.6）
   核 版本                     查看版本
   核 帮助                     显示本帮助
 
@@ -1376,16 +1717,17 @@ def 命令行(argv):
         打印帮助()
         return 0
     if 首 in ("工坊", "界面", "gui", "--gui"):
+        # 主推 Qt 版（核工坊Qt）。tkinter 版自 0.0.6 起冻结不更新，
+        # 没有代码折叠、版本控制面板、帮助菜单 —— 让「核 工坊」进旧版，
+        # 用户会把旧版的缺陷当成新版的缺陷报回来。旧版保留成 工坊旧。
         try:
-            import 核工坊
+            import 核工坊Qt
         except ImportError as e:
-            print("打不开图形界面：%s" % e, file=sys.stderr)
-            print(
-                "请确认 核工坊.py 与 核.py 在同一个文件夹，且使用的 Python 带 tkinter。",
-                file=sys.stderr,
-            )
-            return 1
-        return 核工坊.启动(argv[1:])
+            return _开旧工坊(argv[1:], "Qt 界面打不开（%s）" % e)
+        return 核工坊Qt.启动(argv[1:])
+
+    if 首 in ("工坊旧", "界面旧", "gui-tk"):
+        return _开旧工坊(argv[1:], None)
 
     if 首 in ("运行", "run"):
         if len(argv) < 2:
@@ -1429,9 +1771,33 @@ def 命令行(argv):
     if 首.endswith(扩展名) or os.path.isfile(首):
         return 运行文件(首, argv[1:])
 
+    if os.path.isdir(首):
+        print("「%s」是一个目录，不是 %s 源文件。" % (首, 扩展名), file=sys.stderr)
+        print("      例如：核 运行 %s" % os.path.join(首, "某个文件" + 扩展名), file=sys.stderr)
+        return 2
+
     print("不认识的命令：%s" % 首, file=sys.stderr)
     打印帮助()
     return 2
+
+
+def _开旧工坊(参数, 原因):
+    """打开 tkinter 版（保留的后门，不推荐）。"""
+    if 原因:
+        print("提示：%s" % 原因, file=sys.stderr)
+        print("      改用 tkinter 旧界面（功能停在 0.0.6）。", file=sys.stderr)
+        print("      想让 Qt 界面能用，请安装 PySide6：", file=sys.stderr)
+        print("        py -3 -m pip install PySide6-Essentials", file=sys.stderr)
+    try:
+        import 核工坊
+    except ImportError as e:
+        print("打不开图形界面：%s" % e, file=sys.stderr)
+        print(
+            "请确认 核工坊Qt.py / 核工坊.py 与 核.py 在同一个文件夹。",
+            file=sys.stderr,
+        )
+        return 1
+    return 核工坊.启动(参数)
 
 
 def 主入口():

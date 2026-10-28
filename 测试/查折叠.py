@@ -187,6 +187,34 @@ print("== 九、全角/半角冒号都认 ==")
 检("行尾注释不影响", 核工坊Qt.编辑器.是块开头("核若 x： 核核 说明"))
 检("普通语句不是块开头", not 核工坊Qt.编辑器.是块开头("核说(1)"))
 
+print("== 十、回车自动缩进与折叠用同一套「块开头」判定 ==")
+# 以前 _自动缩进 自己写 rstrip().endswith(":")，不剥行尾注释，
+# 于是「核若 对： 核核 说明」后回车不缩进，而同一行却能折叠 ——
+# 同一个概念两处口径不一致，用户看到的是莫名其妙的行为。
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
+
+
+def 回车后(行文):
+    编9 = 新编(行文)
+    游9 = 编9.textCursor()
+    游9.movePosition(QTextCursor.EndOfBlock)
+    编9.setTextCursor(游9)
+    编9.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier, "\n"))
+    return 编9.取文本().split("\n")[1]
+
+
+检("带行尾注释的冒号行也缩进一级",
+   回车后("核若 对： 核核 说明") == "    ",
+   "第二行=%r" % 回车后("核若 对： 核核 说明"))
+检("不带注释的照旧缩进", 回车后("核若 对：") == "    ")
+检("非块开头只继承缩进",
+   回车后("    核说(1)") == "    ",
+   "第二行=%r" % 回车后("    核说(1)"))
+检("缩进 + 块开头叠加",
+   回车后("    核若 对： 核核 x") == "        ",
+   "第二行=%r" % 回车后("    核若 对： 核核 x"))
+
 print()
 print("=" * 62)
 if 问题:

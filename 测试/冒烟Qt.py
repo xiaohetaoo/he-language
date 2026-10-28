@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """冒烟：真实启动主窗、打开例子、切主题、开各面板、运行一个程序，全程抓异常。"""
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 
 这里 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,7 +45,16 @@ def 做(名, 函数):
         错误.append(traceback.format_exc())
 
 
-做("打开例子", lambda: 窗.打开(os.path.join(这里, "例子", "01_你好.xht")))
+# 例子复制到临时目录再打开。**绝不能直接打开仓库里的例子** ——
+# 下面的「保存」步骤会把当前文档写回它的文件路径，于是每跑一次冒烟
+# 都往源码树里写一次文件。实测 例子/01_你好.xht 的 mtime 每次都被刷新，
+# 一旦当时编辑区里的内容不是原文（IDE 手滑、输入法误上屏、别的测试
+# 改过当前文档），这个「示例」就会被悄悄覆盖掉 —— 真的发生过。
+临时 = tempfile.mkdtemp(prefix="核工坊冒烟_")
+样例 = os.path.join(临时, "01_你好.xht")
+shutil.copyfile(os.path.join(这里, "例子", "01_你好.xht"), 样例)
+
+做("打开例子", lambda: 窗.打开(样例))
 做("切浅色", lambda: 窗.换主题("浅色"))
 做("切深色", lambda: 窗.换主题("深色"))
 做("切字号", lambda: 窗.改字号(1))

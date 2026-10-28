@@ -16,6 +16,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
+import 核
 import 主题
 
 
@@ -79,18 +80,20 @@ class 高亮器(QSyntaxHighlighter):
         # 注释格式单独存：注释不走正则（见下面 _标注释 的说明），
         # 但仍要用同一套配色，所以在这里建好放进 self.注释格式。
         self.注释格式 = 格式(主题色["注释"], 斜体=True)
+        self.字符串格式 = 格式(主题色["字符串"])
 
         self.规则 = [
-            # 注释不在这里用正则匹配 —— 「核核」的判定必须与 核.py 翻译器
-            # **完全一致**，否则同一行会被染成注释色、却又被当成代码。
-            # 翻译器是逐位置扫描的（遇到不合法的「核核」会跳过继续找下一个），
-            # 而一条正则只能表达「任意位置匹配」，两者在
-            # 「核核abc 核核 def」这种行上必然打架。
-            # 所以注释改由 _标注释 单独处理，直接调用 核.词左界/词右界。
-            (
-                r'核?"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'',
-                格式(主题色["字符串"]),
-            ),
+            # 注释和字符串都不在这里 —— 「核核」的判定必须与 核.py 翻译器
+            # **完全一致**，一条正则只能表达「任意位置匹配」，两者在
+            # 「核核abc 核核 def」这种行上必然打架；字符串还会跨行。
+            # 两者都交给 核.扫描行 一次扫出来（见 highlightBlock）。
+            #
+            # 更要紧的是「后染的覆盖先染的」：以前规则按列表顺序
+            # finditer + setFormat，字符串规则排第一，关键字/内置/数字
+            # 排在后面，于是 核说("核若 核长度") 里字符串**内部**的
+            # 「核若」「核长度」被关键字色、内置色盖掉 —— 字符串看着像代码。
+            # 现在字符串、注释由 扫描行 定出区间，其余规则跳过区间内的命中，
+            # 最后再统一染一遍字符串，优先级不再依赖列表顺序。
             (r"\b0[xX][0-9a-fA-F]+\b|\b\d[\d_]*(?:\.\d+)?\b", 格式(主题色["数字"])),
             (带边界(关键字), 格式(主题色["关键字"], 粗体=True)),
             (带边界(内置), 格式(主题色["内置"])),
@@ -98,46 +101,65 @@ class 高亮器(QSyntaxHighlighter):
             (r"(?<=核类\s)[^\s(（:：]+", 格式(主题色["函数名"], 粗体=True)),
         ]
 
-    def _标注释(self, 文本, 格式):
-        """把注释染成注释色。
+    def _标注释(self, 文本, 格式, 注释起):
+        """把注释放到行尾染成注释色。
 
-        判定直接借用 核.py 的 词左界/词右界 —— 和翻译器用的是同一套规则，
-        不会再出现「高亮说是注释、翻译说是代码」的情况。
-
-        还要跳过字符串里的内容：字符串里的「核核」不是注释，
-        否则 核说('核核 在字符串里') 里的字会被染成注释色。
+        注释起 由 核.扫描行 给出（-1 表示本行没有注释）—— 判定直接用
+        核.py 自己的扫描器，和翻译器同一套规则，不会再出现
+        「高亮说是注释、翻译说是代码」；字符串里的「核核」也不会被误认
+        （扫描器碰到字符串会整段跳过）。
         """
+        if 注释起 is not None and 注释起 >= 0:
+            self.setFormat(注释起, len(文本) - 注释起, 格式)
+
+    def highlightBlock(self, 文本):
+        if not self.开:
+            # 关闭高亮时也要把块状态归零，否则下次打开会读到陈旧状态，
+            # 把一整块凭空当成三引号串的续行。
+            self.setCurrentBlockState(0)
+            return
         核 = self.主窗.内核
-        串区 = 核.字符串区间(文本)
+        # 块状态：0 = 正常，1 = 在 ''' 里，2 = 在 \"\"\" 里。
+        # 用 QSyntaxHighlighter 自己的 setCurrentBlockState —— 这是 Qt 为此
+        # 准备的接口；自定义块数据（折叠标记）走 QTextBlockUserData，
+        # 两者互不干扰。注意首块 previousBlockState() 是 -1，按 0 处理。
+        上态 = self.previousBlockState()
+        起始引号 = None
+        if 上态 == 1:
+            起始引号 = "'''"
+        elif 上态 == 2:
+            起始引号 = '"""'
+
+        串区, 注释起, 未闭合 = 核.扫描行(文本, 起始引号)
+        if 未闭合 == "'''":
+            self.setCurrentBlockState(1)
+        elif 未闭合 == '"""':
+            self.setCurrentBlockState(2)
+        else:
+            self.setCurrentBlockState(0)
+        if 注释起 is not None and 注释起 < 0:
+            注释起 = None
 
         def 在串里(位置):
             return any(起 <= 位置 < 止 for 起, 止 in 串区)
 
-        i = 0
-        while True:
-            i = 文本.find("核核", i)
-            if i < 0:
-                break
-            合法 = 核.词左界(文本, i) and 核.词右界(文本, i + 2)
-            if 合法 and not 在串里(i):
-                self.setFormat(i, len(文本) - i, 格式)
-                return  # 注释到行尾，后面都是注释
-            i += 2
-        # 英文 # 注释（同样不能落在字符串里）
-        j = 文本.find("#")
-        while j >= 0:
-            if not 在串里(j):
-                self.setFormat(j, len(文本) - j, 格式)
-                return
-            j = 文本.find("#", j + 1)
+        def 在注释里(位置):
+            return 注释起 is not None and 位置 >= 注释起
 
-    def highlightBlock(self, 文本):
-        if not self.开:
-            return
-        self._标注释(文本, self.注释格式)
         for 模式, 格式 in self.规则:
             for m in re.finditer(模式, 文本):
-                self.setFormat(m.start(), m.end() - m.start(), 格式)
+                起 = m.start()
+                # 字符串和注释里的内容不属于代码，任何规则都不该染上去。
+                # 注释这一条以前漏了：核核 核说(1) 核若 123 里的
+                # 「核说」「核若」「123」会被染成内置色/关键字色/数字色，
+                # 一条注释看起来花花绿绿像代码 —— 和字符串那条是同一个毛病。
+                if 在串里(起) or 在注释里(起):
+                    continue
+                self.setFormat(起, m.end() - 起, 格式)
+        # 注释与字符串最后染：它们是最高优先级，任何规则都不该盖到头上。
+        self._标注释(文本, self.注释格式, 注释起 if 注释起 is not None else -1)
+        for 起, 止 in 串区:
+            self.setFormat(起, 止 - 起, self.字符串格式)
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +179,19 @@ class 折叠数据(QTextBlockUserData):
     高亮器不碰它，且它会跟着块一起在编辑中搬运。
     """
 
-    __slots__ = ("折叠",)
+    __slots__ = ("折叠", "区头文本", "区止块", "区界块")
 
     def __init__(self):
         super().__init__()
         self.折叠 = False
+        # 折叠区缓存。折叠区() 要向下扫到区域结束，800 个并列折叠头
+        # 实测一次全文重算 32ms —— 是「有折叠时每敲一键重算全文」里
+        # 最贵的一项。而区域边界只由「本行的缩进与行尾冒号」和
+        # 「区域外第一个缩进不深于本行的行」两处决定，只要这两处没被
+        # 改到，缓存就依然成立（见 折叠区 / _缓存边界）。
+        self.区头文本 = None    # 建缓存时本行的文本
+        self.区止块 = None      # 区域最后一块
+        self.区界块 = None      # 让区域停下来的那一块（None = 一直到最后）
 
 
 class 行号区(QWidget):
@@ -328,6 +358,9 @@ class 编辑器(QPlainTextEdit):
         self._组字中 = False
         # 当前折起来的块数。0 表示没有折叠 —— 文本变化时据此跳过全文重算。
         self._折叠数 = 0
+        # 最近一次文本改动落在哪个字符位置（-1 = 自上次建缓存以来没改过）。
+        # 折叠区缓存靠它判断缓存是否还成立，见 折叠区 / _缓存边界。
+        self._编辑位置 = -1
 
         self.设置字体()
 
@@ -464,25 +497,69 @@ class 编辑器(QPlainTextEdit):
 
     @staticmethod
     def 是块开头(文本):
-        """这一行是不是一个块的开头（以冒号结尾）。"""
-        剥 = 文本.rstrip()
+        """这一行是不是一个块的开头（以冒号结尾）。
+
+        判定口径统一走 核.扫描行：先切掉行尾注释，再看最后一个有效字符
+        是不是冒号。之前是 剥.find("核核") 直接切 —— 既不认「核核紧贴」
+        的边界规则，也会把字符串里的「核核」当注释开头，和翻译器说法不同；
+        而且字符串里的冒号（核说("a:")）会被误判成块开头。
+        """
+        串区, 注释起, _ = 核.扫描行(文本)
+        剥 = 文本[:注释起] if 注释起 >= 0 else 文本
+        剥 = 剥.rstrip()
         if not 剥:
             return False
-        # 去掉行尾注释再判断：`核若 x： 核核 说明` 也算块开头
-        井 = 剥.find("核核")
-        if 井 >= 0:
-            剥 = 剥[:井].rstrip()
-        if not 剥:
+        位 = len(剥) - 1
+        if any(起 <= 位 < 止 for 起, 止 in 串区):
             return False
         return 剥.endswith("：") or 剥.endswith(":")
 
     def 折叠区(self, 块):
-        """返回该块能折起来的最后一行号（含），不能折则 None。"""
+        """返回该块能折起来的最后一行号（含），不能折则 None。
+
+        结果缓存在块上（见 折叠数据）。缓存只在「本行之后、界块之前」
+        被改过时才作废 —— 区域边界只取决于这一段的缩进。
+        """
         if 块 is None or not 块.isValid():
             return None
         文本 = 块.text()
         if not self.是块开头(文本):
             return None
+        数据 = self._数据(块)
+        命中 = self._缓存边界(块, 数据, 文本)
+        if 命中 is not None:
+            return 命中
+        止, 界块 = self._算折叠区(块, 文本)
+        if 数据 is not None:
+            文档 = self.document()
+            数据.区头文本 = 文本
+            数据.区止块 = 文档.findBlockByNumber(止) if 止 is not None else None
+            数据.区界块 = 界块
+        return 止
+
+    def _缓存边界(self, 块, 数据, 文本):
+        """缓存仍成立时返回缓存的止行号；不成立返回 None。"""
+        if 数据 is None or 数据.区头文本 != 文本 or 数据.区止块 is None:
+            return None
+        if not 数据.区止块.isValid():
+            return None
+        编辑 = getattr(self, "_编辑位置", -1)
+        if 编辑 < 块.position():
+            # 改动在本行之前：本行自己的区域没有任何理由改变
+            return 数据.区止块.blockNumber()
+        界块 = 数据.区界块
+        if 界块 is None:
+            # 区域一直延伸到文末，只要本行之后被改过就不敢复用
+            return None
+        if not 界块.isValid():
+            return None
+        if 编辑 < 界块.position():
+            # 改动落在区域内、尾随空行里，或正是让区域停下的那一行上
+            return None
+        return 数据.区止块.blockNumber()
+
+    def _算折叠区(self, 块, 文本):
+        """真正向下扫一遍，返回 (止行号或 None, 界块或 None)。"""
         缩进 = self.缩进数(文本)
         起 = 块.blockNumber() + 1
         止 = -1
@@ -492,19 +569,18 @@ class 编辑器(QPlainTextEdit):
             if not 行.strip():
                 # 空行先跳过，但只有它后面还有更深缩进的行时才纳入范围
                 下一 = 当前.next()
-                还有 = False
                 while 下一.isValid() and not 下一.text().strip():
                     下一 = 下一.next()
                 if 下一.isValid() and self.缩进数(下一.text()) > 缩进:
                     止 = 当前.blockNumber()
                     当前 = 当前.next()
                     continue
-                break
+                return (止 if 止 >= 起 else None), (下一 if 下一.isValid() else None)
             if self.缩进数(行) <= 缩进:
-                break
+                return (止 if 止 >= 起 else None), 当前
             止 = 当前.blockNumber()
             当前 = 当前.next()
-        return 止 if 止 >= 起 else None
+        return (止 if 止 >= 起 else None), None
 
     def 可折叠(self, 块):
         return self.折叠区(块) is not None
@@ -589,19 +665,26 @@ class 编辑器(QPlainTextEdit):
 
         先假定全部可见再逐块隐藏：折叠区域在编辑后会变（缩进改了、
         冒号删了），只往里加不往外放的话，展开之后那些行仍然是隐藏的。
+
+        **性能**：折叠范围缓存在块上（见 折叠区），所以本函数的成本就剩
+        一次遍历。遍历本身没法省（每一块的可见性都要确认），但
+        `_文档重排`（markContentsDirty 全文 + 重排）只在可见性**真的变了**
+        时才做 —— 以前每敲一键都无条件要求整篇重排，这是最贵的一环。
+        注意不能用 QTextBlock.isVisible() 判断「当前是什么状态」：
+        控件自身隐藏时它会一律返回 False，拿它比对会把每次都判成「变了」，
+        反而让所有块被重新设一遍；所以自己留一份上次的结果（_可见表）。
         """
         文档 = self.document()
         块 = 文档.firstBlock()
         折叠中 = 0          # 还需要隐藏到第几块
         个数 = 0
+        新表 = []
         while 块.isValid():
             号 = 块.blockNumber()
             if 折叠中 and 号 > 折叠中:
                 折叠中 = 0
-            if 折叠中:
-                块.setVisible(False)
-            else:
-                块.setVisible(True)
+            要藏 = bool(折叠中)
+            if not 要藏:
                 数据 = 块.userData()
                 if 数据 is not None and getattr(数据, "折叠", False):
                     止 = self.折叠区(块)
@@ -611,9 +694,14 @@ class 编辑器(QPlainTextEdit):
                     else:
                         # 已经不是一个块开头了（比如冒号被删了），清掉标记
                         数据.折叠 = False
+            可见 = not 要藏
+            新表.append(可见)
+            块.setVisible(可见)
             块 = 块.next()
         self._折叠数 = 个数
-        self._文档重排()
+        if 新表 != getattr(self, "_可见表", None):
+            self._可见表 = 新表
+            self._文档重排()
 
     def _文档重排(self):
         """让 Qt 按新的可见性重新排版。
@@ -748,10 +836,19 @@ class 编辑器(QPlainTextEdit):
         """
         if getattr(self, "_载入中", False):
             return
-        # 有折叠时才重算可见性：折叠状态存在块的 userState 上，
+        # 记下这次改动落在哪儿：折叠区缓存靠它判断「还管不管用」。
+        # 拿不到就别用缓存（_缓存边界 会一律判失效），宁慢不错。
+        游 = self.textCursor()
+        self._编辑位置 = min(游.position(), 游.anchor())
+        # 有折叠时才重算可见性：折叠标记挂在块上，
         # 编辑之后块的相对关系会变（缩进改了、冒号删了），
         # 必须重新算一遍「哪些块该藏起来」。没有折叠就完全跳过 ——
         # 否则每敲一个字都要走一遍全文。
+        #
+        # 这里刻意**不做去抖**：折叠范围已经缓存在块上，落在改动之外
+        # 的区域不会重算，实测 500/2000/8000 行分别是 0.4/2.4/7.1ms，
+        # 直接同步算完全可以接受；去抖反而会让「删掉冒号后区域该展开」
+        # 这类变化延迟一拍才生效。
         if getattr(self, "_折叠数", 0):
             self.应用折叠()
             self.行号.update()
@@ -850,6 +947,23 @@ class 编辑器(QPlainTextEdit):
         """是否正在用输入法组字（自己记账，不依赖平台接口）。"""
         return bool(getattr(self, "_组字中", False))
 
+    # 自动配对要放行的修饰键。Shift 必须放行：
+    # 真实键盘上 ( ) { } " 全都要按住 Shift 才打得出来，
+    # 事件.modifiers() 必然带着 ShiftModifier，若一律不给配对
+    # 这几个符号的配对就整个失效（0.0.8 使用 301a395 引入的回归）。
+    # Ctrl / Alt / Meta 组合仍然要让路给快捷键。
+    #
+    # 这里特意**用整数做位运算**，不用 `事件.modifiers() & ~Qt.ShiftModifier`：
+    # PySide6 的 Qt.KeyboardModifier 只声明了老的那几位
+    # （位掩码 0x1FFFFFF），而 ControlModifier = 0x4000000 在掩码之外，
+    # 于是 `~Qt.ShiftModifier` 取不到 Ctrl 那一位 —— 实测
+    # Ctrl+( 仍然会被自动配对，正是要防的情况。转成 int 就没这问题。
+    配对放行修饰 = int(Qt.ShiftModifier.value)
+
+    def _无配对外修饰(self, 事件: QKeyEvent):
+        """除了 Shift 之外没按别的修饰键 —— 才由本类处理这次按键。"""
+        return not (int(事件.modifiers().value) & ~self.配对放行修饰)
+
     配对表 = {
         "(": ")", "[": "]", "{": "}", "'": "'", '"': '"',
         "（": "）", "【": "】", "｛": "｝",
@@ -880,7 +994,7 @@ class 编辑器(QPlainTextEdit):
         # 所以按 '"' 时先命中上面的自动配对分支、插出一对 ""，
         # 用户再按 '"' 收尾时又插一对 —— 打 核说("中文") 出来是
         # 核说("中文")"")，凭空多三个字符。
-        if 文本 and 文本 in self.配对表 and not 组字中 and not 事件.modifiers():
+        if 文本 and 文本 in self.配对表 and not 组字中 and self._无配对外修饰(事件):
             游 = self.textCursor()
             if not 游.hasSelection():
                 行文 = 游.block().text()
@@ -890,7 +1004,7 @@ class 编辑器(QPlainTextEdit):
                     游.movePosition(QTextCursor.Right)
                     self.setTextCursor(游)
                     return
-        if 文本 in self.配对表 and not 事件.modifiers() and not 组字中:
+        if 文本 in self.配对表 and self._无配对外修饰(事件) and not 组字中:
             self._自动配对(文本, self.配对表[文本])
             return
         if 组字中 and 文本 in self.配对表:
@@ -899,7 +1013,7 @@ class 编辑器(QPlainTextEdit):
             事件.accept()
             return
         # 输入右括号时，若紧邻的正是它，直接跳过（不重复插入）
-        if 文本 and 文本 in self.配对表.values() and not 组字中:
+        if 文本 and 文本 in self.配对表.values() and not 组字中 and self._无配对外修饰(事件):
             游 = self.textCursor()
             if not 游.hasSelection() and 游.block().text()[游.positionInBlock():游.positionInBlock() + 1] == 文本:
                 游.movePosition(QTextCursor.Right)
@@ -967,11 +1081,16 @@ class 编辑器(QPlainTextEdit):
 
         实测 QPlainTextEdit 的原生回车**不会**继承上一行缩进（第 2 行是空的），
         所以要自己补完整的缩进量，而不是只补差额。
+
+        判定块开头用 是块开头 —— 与折叠用的是同一个方法。
+        以前这里自己写 rstrip().endswith(":")，不剥行尾注释，
+        于是「核若 对： 核核 说明」后回车不缩进，而同一行却能折叠：
+        同一个「块开头」两处口径不一致，用户看到的是莫名其妙的行为。
         """
         光标 = self.textCursor()
         行文 = 光标.block().text()[: 光标.positionInBlock()]
-        缩进 = len(行文) - len(行文.lstrip())
-        额外 = self.制表宽 if 行文.rstrip().endswith(("：", ":")) else 0
+        缩进 = len(行文) - len(行文.lstrip(" \t\u3000"))
+        额外 = self.制表宽 if self.是块开头(行文) else 0
         空格 = " " * (缩进 + 额外)
         super().keyPressEvent(事件)
         if 空格:
@@ -1090,28 +1209,37 @@ class 编辑器(QPlainTextEdit):
             找到 = self.find(词, 旗)
         return bool(找到)
 
-    def 替换当前(self, 查找词, 替换词):
-        """替换当前选中的匹配项（没有选中就先找一个）。"""
+    def 替换当前(self, 查找词, 替换词, 区分大小写=False):
+        """替换当前选中的匹配项（没有选中就先找一个）。
+
+        区分大小写必须一路传下来：查找用精确旗标定位、替换却按
+        不敏感口径认选中项，两边口径不一致，替换会换掉用户没看到的词。
+        """
         游 = self.textCursor()
-        if not 游.hasSelection() or 游.selectedText() != 查找词:
-            if not self.查找下一个(查找词):
+        选中 = 游.selectedText()
+        符合 = (选中 == 查找词) if 区分大小写 else (选中.casefold() == 查找词.casefold())
+        if not 游.hasSelection() or not 符合:
+            if not self.查找下一个(查找词, 区分大小写):
                 return False
             游 = self.textCursor()
         游.insertText(替换词)
         self.setTextCursor(游)
         return True
 
-    def 全部替换(self, 查找词, 替换词):
+    def 全部替换(self, 查找词, 替换词, 区分大小写=False):
         """替换全部匹配项，返回替换次数。"""
         if not 查找词:
             return 0
+        旗 = QTextDocument.FindFlag(0)
+        if 区分大小写:
+            旗 = QTextDocument.FindCaseSensitively
         次数 = 0
         游 = QTextCursor(self.document())
         游.beginEditBlock()
         游.movePosition(QTextCursor.Start)
         while True:
             self.setTextCursor(游)
-            if not self.find(查找词):
+            if not self.find(查找词, 旗):
                 break
             游 = self.textCursor()
             游.insertText(替换词)

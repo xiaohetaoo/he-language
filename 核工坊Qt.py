@@ -17,8 +17,10 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import (
+    QAction, QIcon, QKeySequence, QPixmap, QShortcut, QTextCursor,
+)
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QSplitter, QTabBar,
@@ -27,12 +29,93 @@ from PySide6.QtWidgets import (
 
 import 主题
 import 配置
+import 版本控制
 from 编辑器 import 编辑器
 
 这里 = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, 这里)
 
 import 核  # noqa: E402
+
+
+class _版本任务(QRunnable):
+    """跑一次 git 状态查询。由 版本查询器 丢进线程池。"""
+
+    def __init__(self, 查询器, 目录):
+        super().__init__()
+        self._查询器 = 查询器
+        self._目录 = 目录
+        self.setAutoDelete(True)
+
+    def run(self):
+        try:
+            状态 = 版本控制.状态(self._目录)
+        except Exception as e:  # noqa: BLE001 - 查询失败也必须回一个结果
+            状态 = dict(版本控制.状态(""))
+            状态["原因"] = "读取失败：%s" % e
+        self._查询器._完成(self._目录, 状态)
+
+
+class 版本查询器(QObject):
+    """在后台线程里读 git 状态，结果用信号送回主线程。
+
+    为什么必须挪出 GUI 线程：版本控制.状态() 串行跑 4 个 git 子进程
+    （--is-inside-work-tree、rev-parse、status --porcelain、rev-list），
+    每个超时上限 6 秒。以前 保存() 末尾直接同步调用它 —— 每按一次
+    Ctrl+S 都要在 GUI 线程上等 git 返回。本仓库（150 个 blob）实测
+    单次 272ms，仓库变大、放进网络盘、或被杀毒软件逐个文件扫描时
+    就是秒级冻结。启动时改用 singleShot(0) 只是把它推迟到事件队列末尾，
+    仍然在主线程同步跑，没解决卡顿。
+
+    合并策略：同一时刻只允许一个查询在飞。飞行期间来的请求只记下
+    「还要再查一次最新的」，落地后自动补跑 —— 连按保存不会堆出一串
+    并发子进程，也不会把界面淹在一堆过期结果里。
+    """
+
+    好了 = Signal(object, str)  # (状态 dict, 这次查的是哪个目录)
+
+    def __init__(self, 父=None):
+        super().__init__(父)
+        self._池 = QThreadPool(self)
+        self._池.setMaxThreadCount(1)
+        self._锁 = threading.Lock()
+        self._飞行中 = False
+        self._待查 = None
+        self._停 = False
+
+    def 查(self, 目录):
+        with self._锁:
+            if self._停:
+                return
+            if self._飞行中:
+                self._待查 = 目录
+                return
+            self._飞行中 = True
+        self._池.start(_版本任务(self, 目录))
+
+    def _完成(self, 目录, 状态):
+        """在工作线程里被调用 —— 只碰锁和信号，不碰界面控件。"""
+        with self._锁:
+            还有 = self._待查
+            self._待查 = None
+            self._飞行中 = False
+            if self._停:
+                return
+        try:
+            self.好了.emit(状态, 目录)
+        except RuntimeError:
+            # 窗口已经先被销毁（关掉窗口、测试里 deleteLater），
+            # 底层 C++ 对象没了，信号发不出去 —— 直接放弃这次结果。
+            return
+        if 还有 is not None:
+            self.查(还有)
+
+    def 停(self):
+        """退出前调用：不再回填结果，并等正在跑的任务收尾。"""
+        with self._锁:
+            self._停 = True
+            self._待查 = None
+        self._池.waitForDone(3000)
 
 
 def 图标路径(名):
@@ -426,8 +509,29 @@ class 左竖条(QWidget):
         self.状态点.setFixedSize(32, 32)
         self.状态点.setToolTip("运行状态")
         布局.addWidget(self.状态点)
+        #: 当前运行状态：空闲 / 运行
+        self._状态 = "空闲"
 
         self.刷新图标()
+        self.设状态点("空闲")
+
+    def 设状态点(self, 状态):
+        """切换竖条底部状态点的颜色。
+
+        这个点是 画图标("圆点") 生成的 **QPixmap**，不是文字 ——
+        以前用 setStyleSheet("color: …") 改它，QSS 的 color 对 pixmap
+        毫无作用，所以「运行中」那个点永远是绿的，视觉反馈等于不存在。
+        要改就得按新颜色重画一张。
+        """
+        self._状态 = 状态
+        表 = getattr(self.主窗, "主题", {}) or {}
+        if 状态 == "运行":
+            色 = 表.get("强调", "#3574F0")
+            self.状态点.setToolTip("正在运行")
+        else:
+            色 = 表.get("图标状态点", "#6AAB73")
+            self.状态点.setToolTip("运行状态：空闲")
+        self.状态点.setPixmap(画图标("圆点", 色))
 
     def 刷新图标(self, 主题表=None):
         """按当前主题重画竖条图标。"""
@@ -438,7 +542,8 @@ class 左竖条(QWidget):
         self.钮们["结构"].setPixmap(画图标(形状表["结构"], 取("图标结构", "#B58EF8")))
         self.钮们["运行"].setPixmap(画图标(形状表["运行"], 取("图标运行", "#4CAF6E")))
         self.钮们["设置"].setPixmap(画图标("齿轮", 取("图标设置", "#9DA0A8")))
-        self.状态点.setPixmap(画图标("圆点", 取("图标状态点", "#6AAB73")))
+        # 状态点的颜色由运行状态决定，不能在这里无条件重置成空闲色
+        self.设状态点(getattr(self, "_状态", "空闲"))
 
 
 class 主窗(QMainWindow):
@@ -484,8 +589,10 @@ class 主窗(QMainWindow):
         self.新建()
         self._刷新标题()
         # 顶行的版本控制按钮：启动时读一次 git 状态。
-        # 用 singleShot 排到事件队列末尾 —— 读 git 要起好几个子进程，
-        # 放在这里同步跑会让窗口晚一秒多才显示出来。先让界面出来再说。
+        # 查询走后台线程（版本查询器）—— 读 git 要起好几个子进程，
+        # 同步跑会让窗口晚一秒多才显示出来，而且以后每次保存都要再等一次。
+        self._版本查询 = 版本查询器(self)
+        self._版本查询.好了.connect(self._版本状态好了)
         QTimer.singleShot(0, self.刷新版本状态)
 
     def _还原窗口尺寸(self):
@@ -862,7 +969,7 @@ class 主窗(QMainWindow):
             return
         命中 = 0
         self.清空控制台()
-        self.控制台.appendPlainText("在项目中查找：%s\n" % 词)
+        self._写控制台("在项目中查找：%s\n" % 词)
         for 目录, 子目录, 文件 in os.walk(self.项目目录):
             子目录[:] = [
                 d for d in 子目录
@@ -881,10 +988,10 @@ class 主窗(QMainWindow):
                     if 词 in 行:
                         命中 += 1
                         相对 = os.path.relpath(全, self.项目目录)
-                        self.控制台.appendPlainText(
-                            "%s:%d:  %s" % (相对, 号, 行.rstrip())
+                        self._写控制台(
+                            "%s:%d:  %s\n" % (相对, 号, 行.rstrip())
                         )
-        self.控制台.appendPlainText("\n共 %d 处" % 命中)
+        self._写控制台("\n共 %d 处\n" % 命中)
         self.状态("项目内找到 %d 处" % 命中)
 
     # ================= 文档管理 =================
@@ -935,11 +1042,18 @@ class 主窗(QMainWindow):
         菜单.exec(self.标签栏.mapToGlobal(位置))
 
     def _关闭其他标签(self, 保留):
+        """关掉除「保留」以外的所有标签。
+
+        逐个走 关闭文档 的「要保存吗？」三选一，任一「取消」即中止。
+        以前这里先把 已改 抹成 False 再强制关闭，批量操作比单个关闭
+        还危险 —— 用户改了多个文件后右键「关闭其他」，未保存的修改
+        无声无息全丢。批量不能比单个更宽松。
+        """
         保留文档 = self.文档集[保留] if 0 <= 保留 < len(self.文档集) else None
         for 编 in list(self.文档集):
             if 编 is not 保留文档:
-                编.已改 = False
-                self.关闭文档(编, 强制=True)
+                if not self.关闭文档(编):
+                    return
 
     def _复制路径(self, 索引):
         if 0 <= 索引 < len(self.文档集):
@@ -1291,8 +1405,18 @@ class 主窗(QMainWindow):
                     return
         self.停止(静默=True)
         self.清空控制台()
+        # 队列要在开新进程之前换一个新的：旧读线程可能已经在关流前读到了
+        # 数据、只是还没被 _吸输出 取走，那些残留会打在新一轮运行的开头。
+        换队列 = getattr(self, "_输出", None)
+        self._输出 = queue.Queue()
+        if 换队列 is not None:
+            while True:
+                try:
+                    换队列.get_nowait()
+                except queue.Empty:
+                    break
         命令 = self._内核命令(self.当前.文件路径)
-        self.控制台.appendPlainText("> " + " ".join(命令[1:]))
+        self._写控制台("> " + " ".join(命令[1:]) + "\n")
 
         环境 = os.environ.copy()
         环境.update(
@@ -1306,23 +1430,33 @@ class 主窗(QMainWindow):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=环境,
+                # 开发模式下（用 pythonw 跑核工坊）不加这个标志，子进程
+                # python.exe 会弹一个黑色控制台窗口。打包版是 GUI 子系统
+                # 不受影响。git 调用早就有这个处理，统一用同一份实现。
+                creationflags=版本控制.无窗口标志(),
             )
         except OSError as e:
-            self.控制台.appendPlainText("启动失败：%s" % e)
+            self._写控制台("启动失败：%s\n" % e)
             self.进程 = None
             return
         self.运行状态.setText("运行中…")
         self.运行状态.setStyleSheet("color: %s;" % self.主题["强调"])
-        self.竖条.状态点.setStyleSheet("color: %s;" % self.主题["强调"])
+        self.竖条.设状态点("运行")
         self._读线程 = threading.Thread(
-            target=self._读输出, args=(self.进程,), daemon=True
+            target=self._读输出, args=(self.进程, self._输出), daemon=True
         )
         self._读线程.start()
         self._轮询 = QTimer(self)
         self._轮询.timeout.connect(self._检查进程)
         self._轮询.start(80)
 
-    def _读输出(self, 进程):
+    def _读输出(self, 进程, 队列):
+        """把子进程的输出搬进 队列。
+
+        队列**按参数传进来**，不是每次读 self._输出 —— 运行() 开新一轮时会
+        换一个新队列，而上一轮的读线程可能还活着一瞬间。如果它按属性取，
+        就会把上一轮的残留写进**新**队列，等于没清干净。
+        """
         try:
             os.set_blocking(进程.stdout.fileno(), False)
         except (AttributeError, OSError, ValueError):
@@ -1337,7 +1471,7 @@ class 主窗(QMainWindow):
                 except (OSError, ValueError):
                     break
                 if 块:
-                    self._输出.put(块.decode("utf-8", "replace"))
+                    队列.put(块.decode("utf-8", "replace"))
                     空读 = 0
                     continue
                 空读 += 1
@@ -1358,24 +1492,14 @@ class 主窗(QMainWindow):
                 读.join(timeout=1.0)
             self._吸输出()
             self._收尾()
-            self.控制台.appendPlainText("\n[程序结束，返回 %d]\n" % 码)
+            self._写控制台("\n[程序结束，返回 %d]\n" % 码)
             self.运行状态.setText("就绪")
             self.运行状态.setStyleSheet("")
-            self.竖条.状态点.setStyleSheet("")
+            self.竖条.设状态点("空闲")
             self.状态("运行结束（返回 %s）" % 码)
             if self._轮询:
                 self._轮询.stop()
                 self._轮询 = None
-
-    def _吸输出(self):
-        while True:
-            try:
-                文本 = self._输出.get_nowait()
-            except queue.Empty:
-                return
-            # 用 appendPlainText 保证每块输出从新行开始：
-            # insertPlainText 会接在命令行尾巴上（曾出现「...xht你好世界」）
-            self.控制台.appendPlainText(文本.rstrip("\n"))
 
     def _收尾(self):
         进程 = self.进程
@@ -1404,27 +1528,55 @@ class 主窗(QMainWindow):
             self._轮询.stop()
             self._轮询 = None
         if not 静默:
-            self.控制台.appendPlainText("\n[已停止]\n")
+            self._写控制台("\n[已停止]\n")
             self.运行状态.setText("就绪")
             self.运行状态.setStyleSheet("")
-            self.竖条.状态点.setStyleSheet("")
+            self.竖条.设状态点("空闲")
             self.状态("已停止")
 
     def 发送输入(self):
         文 = self.输入框.text()
         self.输入框.clear()
         if self.进程 is None or self.进程.poll() is not None:
-            self.控制台.appendPlainText("（程序已结束，这句没发出去）\n")
+            self._写控制台("（程序已结束，这句没发出去）\n")
             return
         try:
             self.进程.stdin.write((文 + "\n").encode("utf-8"))
             self.进程.stdin.flush()
-            self.控制台.appendPlainText(文 + "\n")
+            # 回显也要走 _写控制台：程序刚打印的提示语（多半不带换行）
+            # 后面就该紧接着用户输入，appendPlainText 会把它挤到下一行。
+            self._写控制台(文 + "\n")
         except (OSError, ValueError) as e:
-            self.控制台.appendPlainText("发送失败：%s\n" % e)
+            self._写控制台("发送失败：%s\n" % e)
+
+    def _写控制台(self, 文本):
+        """把文本原样接进运行窗口，**保留它自己的换行结构**。
+
+        以前统一用 appendPlainText(文本.rstrip("\\n"))：QPlainTextEdit 的
+        appendPlainText 每次都新起一段，于是程序里不带 \\n 的输出
+        （input 的提示语、核尾="" 的打印、进度提示）都被硬生生截成两行 ——
+        实测 `请输入：` 和随后回显的 `小明` 明明该在同一行，却分成了两行。
+        改法：直接 insertPlainText，光标先移到文末；要不要换行由文本自己决定。
+        """
+        if not 文本:
+            return
+        游 = self.控制台.textCursor()
+        游.movePosition(QTextCursor.End)
+        self.控制台.setTextCursor(游)
+        self.控制台.insertPlainText(文本)
+        条 = self.控制台.verticalScrollBar()
+        条.setValue(条.maximum())
 
     def 清空控制台(self):
         self.控制台.clear()
+
+    def _吸输出(self):
+        while True:
+            try:
+                文本 = self._输出.get_nowait()
+            except queue.Empty:
+                return
+            self._写控制台(文本)
 
     def 检查语法(self):
         # 语法检查编译的是编辑区里的当前文本（见下面 编译源码 的入参），
@@ -1437,7 +1589,9 @@ class 主窗(QMainWindow):
         路径 = self.当前.文件路径 or os.path.join(self.项目目录, "未命名%s" % self.内核.扩展名)
         # 未定义清单写到项目目录 —— 之前用 未定义报告(None)，
         # 而 保存() 遇到 None 路径会直接返回，于是按 F9 永远看不到记录。
-        报告 = self.内核.未定义报告(
+        # 用 取报告 拿共享实例：运行程序那边也用它，两个实例各自
+        # 「读一次、整份写回」会互相冲掉新增记录。
+        报告 = self.内核.取报告(
             os.path.join(self.项目目录, self.内核.未定义文件名)
         )
         # 错误信息要送进运行窗口的控制台，不能写 sys.stderr ——
@@ -1452,11 +1606,11 @@ class 主窗(QMainWindow):
             报告.保存()
         详情 = 缓冲.getvalue()
         if 代码 is None:
-            self.控制台.appendPlainText(详情.rstrip("\n") if 详情 else "语法有误")
+            self._写控制台((详情.rstrip("\n") if 详情 else "语法有误") + "\n")
             self.状态("语法有误，详情见运行窗口")
         else:
             if 详情.strip():
-                self.控制台.appendPlainText(详情.rstrip("\n"))
+                self._写控制台(详情.rstrip("\n") + "\n")
             self.状态("检查通过")
 
     def 打开未定义清单(self):
@@ -1606,32 +1760,37 @@ class 主窗(QMainWindow):
     # ================= 版本控制（只读） =================
 
     def 刷新版本状态(self):
-        """读一次 git 状态并更新顶行按钮文字。
+        """请求读一次 git 状态并更新顶行按钮文字。
 
         只读 —— 不提交、不暂存、不推送。详见 版本控制.py 的模块说明。
-        git 不存在或不是仓库时降级成「未启用」，不报错。
+        查询在后台线程跑（见 版本查询器）；git 不存在或不是仓库时
+        降级成「未启用」，不报错，也不卡界面。
         """
+        按钮 = getattr(self.顶行, "版本钮", None)
+        查询器 = getattr(self, "_版本查询", None)
+        if 按钮 is None or 查询器 is None:
+            return
+        按钮.setToolTip("正在读取版本控制状态…")
+        查询器.查(self.项目目录)
+
+    def _版本状态好了(self, 状态, 目录):
+        """后台查询回来了（在主线程里执行）。"""
+        if 目录 != self.项目目录:
+            return  # 项目已经切走，这次结果过期了
         按钮 = getattr(self.顶行, "版本钮", None)
         if 按钮 is None:
             return
-        try:
-            import 版本控制
-
-            self._版本状态 = 版本控制.状态(self.项目目录)
-            短 = 版本控制.摘要(self._版本状态)
-            按钮.setText(短)
-            原因 = self._版本状态.get("原因") or ""
-            提示 = "版本控制"
-            if self._版本状态["可用"]:
-                提示 = "分支 %s　·　%d 个文件有改动（点击查看）" % (
-                    self._版本状态["分支"], len(self._版本状态["改动"])
-                )
-            elif 原因:
-                提示 = "版本控制未启用：%s" % 原因
-            按钮.setToolTip(提示)
-        except Exception as e:  # noqa: BLE001
-            按钮.setText("⎇ 未启用")
-            按钮.setToolTip("版本控制读取失败：%s" % e)
+        self._版本状态 = 状态
+        按钮.setText(版本控制.摘要(状态))
+        原因 = 状态.get("原因") or ""
+        提示 = "版本控制"
+        if 状态.get("可用"):
+            提示 = "分支 %s　·　%d 个文件有改动（点击查看）" % (
+                状态.get("分支") or "?", len(状态.get("改动") or [])
+            )
+        elif 原因:
+            提示 = "版本控制未启用：%s" % 原因
+        按钮.setToolTip(提示)
 
     def 版本控制面板(self):
         try:
@@ -1717,6 +1876,29 @@ class 主窗(QMainWindow):
     def _套样式(self):
         """按当前主题/字号重生成整份样式表。"""
         主题.换主题(self, self.主题, self.字号, self.等宽字体名())
+        self._同步对话框样式()
+
+    def _同步对话框样式(self):
+        """把新样式表推给已经打开的对话框。
+
+        查找 / 版本控制 / 帮助 / 快速打开 都是建的时候
+        setStyleSheet(主窗.styleSheet()) 复制一份**快照** —— 独立窗口
+        不会自动继承父窗口样式，但也因此不会跟着变。结果是：深色主题下
+        开着查找框，切到浅色，查找框还是深色。
+        这里遍历顶层窗口，凡是标了 跟主题 的就重设一遍；本窗口自己由
+        主题.换主题 负责，跳过。
+        """
+        表 = self.styleSheet()
+        应用 = QApplication.instance()
+        if 应用 is None:
+            return
+        for 部 in 应用.topLevelWidgets():
+            if 部 is self or not getattr(部, "跟主题", False):
+                continue
+            try:
+                部.setStyleSheet(表)
+            except RuntimeError:
+                continue  # 底层对象已经销毁
 
     def 换主题(self, 名):
         self.主题 = 主题.取主题(名, self.主题)
@@ -2110,6 +2292,11 @@ class 主窗(QMainWindow):
                 if 答 == QMessageBox.Yes and not self.保存(编):
                     return
         self.停止(静默=True)
+        查询器 = getattr(self, "_版本查询", None)
+        if 查询器 is not None:
+            # 等后台的 git 查询收尾再退出，免得工作线程在解释器拆栈时
+            # 还回来调 _完成（那时窗口对象可能已经先没了）。
+            查询器.停()
         self.存配置()
         QApplication.instance().quit()
 

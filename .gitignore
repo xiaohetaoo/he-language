@@ -26,6 +26,9 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
+# 归档脚本用 --覆盖 重打同一版本号时留下的备份（本地安全网，不进仓库）
+/版本/_旧_*/
+
 # 临时目录
 .dsh-office-*/
 .preview-tmp/

@@ -7,12 +7,51 @@
 用法：python 测试/跑全部.py
 """
 
+import hashlib
 import os
 import subprocess
 import sys
 import tempfile
 
 根目录 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def 目录指纹():
+    """把源码树里「测试绝不该改动」的文件做一遍指纹。
+
+    为什么要有这个：测试里只要有人对当前文档按下保存，而那个文档又恰好
+    是从例子目录打开的，就会把仓库里的示例文件写掉。真的发生过 ——
+    实测 测试/冒烟Qt.py 每次都刷新 例子/01_你好.xht 的 mtime。
+    单独看「文件内容没变」是看不出来的，只有内容碰巧被改坏时才暴露，
+    那时已经查不出是谁干的。所以在这里留一道闸：跑完对一遍指纹。
+    """
+    结果 = {}
+    目标 = [os.path.join(根目录, "例子")]
+    for 名 in os.listdir(根目录):
+        全 = os.path.join(根目录, 名)
+        if os.path.isfile(全) and 名.rsplit(".", 1)[-1].lower() in (
+            "py", "md", "json", "txt", "cmd",
+        ):
+            目标.append(全)
+    for 项 in 目标:
+        if os.path.isfile(项):
+            文件集 = [项]
+        else:
+            # __pycache__ / 未定义.txt 之类的运行产物不用管，只看 .xht
+            文件集 = [
+                os.path.join(目录, 名)
+                for 目录, _, 名们 in os.walk(项)
+                for 名 in 名们
+                if 名.endswith(".xht")
+            ]
+        for 全 in 文件集:
+            try:
+                with open(全, "rb") as f:
+                    结果[全] = hashlib.md5(f.read()).hexdigest()
+            except OSError:
+                continue
+    return 结果
+
 
 测试集 = [
     ("内核自测", "自测.py"),
@@ -32,6 +71,10 @@ import tempfile
     ("帮助功能", "查帮助.py"),
     ("代码折叠", "查折叠.py"),
     ("版本控制接入", "查版本控制.py"),
+    # —— 以下为 0.0.13 问题清单修复新增 ——
+    ("语法高亮优先级", "查高亮.py"),
+    ("命令行入口", "查命令行.py"),
+    ("配置原子写", "查配置.py"),
 ]
 
 
@@ -46,6 +89,7 @@ def 主():
     # （曾经把制表宽写成 2，导致下一次自测按「应为 4」失败）。
     临时配置 = tempfile.mkdtemp(prefix="核工坊回归配置_")
     环境["核工坊_配置目录"] = 临时配置
+    测前 = 目录指纹()
     失败项 = []
     for 名称, 脚本 in 测试集:
         路径 = os.path.join(根目录, "测试", 脚本)
@@ -68,6 +112,22 @@ def 主():
             print("  " + 行)
         if 结果.returncode != 0:
             失败项.append(名称)
+
+    print("\n--- 源码树有没有被测试写脏 ---")
+    测后 = 目录指纹()
+    动了 = sorted(
+        全 for 全 in set(测前) | set(测后) if 测前.get(全) != 测后.get(全)
+    )
+    if 动了:
+        失败项.append("源码树被测试改动")
+        print("  !! 下列文件在跑测试期间被改动：")
+        for 全 in 动了:
+            print("     %s" % os.path.relpath(全, 根目录))
+        print("     两种可能：①某个测试把仓库里的文件写脏了（要修测试）；")
+        print("                ②跑测试的同时有人在改源码（那就重跑一遍）。")
+        print("     无论哪种，这一轮的测试结果都不能作数。")
+    else:
+        print("  ok   例子与顶层源码文件都没被改动（%d 个文件）" % len(测前))
 
     print("\n" + "=" * 62)
     if 失败项:

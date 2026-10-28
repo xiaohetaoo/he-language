@@ -23,6 +23,8 @@ class 快速打开(QDialog):
         self.setModal(True)
         self.resize(560, 420)
         self.setStyleSheet(主窗.styleSheet())
+        # 主窗换主题时由 核工坊Qt.主窗._同步对话框样式 重新套一遍
+        self.跟主题 = True
 
         self.全部文件 = self._收集(主窗.项目目录)
         self.候选 = list(self.全部文件)

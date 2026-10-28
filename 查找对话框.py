@@ -19,6 +19,8 @@ class 查找对话框(QDialog):
         self.setModal(False)
         self.resize(440, 150)
         self.setStyleSheet(主窗.styleSheet())
+        # 主窗换主题时要被 核工坊Qt.主窗._同步对话框样式 重新套一遍
+        self.跟主题 = True
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         if 编辑器 is not None:
@@ -110,7 +112,7 @@ class 查找对话框(QDialog):
         词 = self.查找框.text()
         if not 词:
             return
-        if 编.替换当前(词, self.替换框.text()):
+        if 编.替换当前(词, self.替换框.text(), self.勾区分.isChecked()):
             self.计数.setText("已替换 1 处")
             self.查找下一个()
         else:
@@ -123,7 +125,7 @@ class 查找对话框(QDialog):
         词 = self.查找框.text()
         if not 词:
             return
-        次数 = 编.全部替换(词, self.替换框.text())
+        次数 = 编.全部替换(词, self.替换框.text(), self.勾区分.isChecked())
         self.计数.setText("已替换 %d 处" % 次数)
 
 
@@ -138,6 +140,7 @@ class 跳转对话框(QDialog):
         self.setModal(True)
         self.resize(260, 90)
         self.setStyleSheet(主窗.styleSheet())
+        self.跟主题 = True
 
         布局 = QHBoxLayout(self)
         布局.setContentsMargins(16, 14, 16, 14)

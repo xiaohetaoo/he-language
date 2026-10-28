@@ -104,6 +104,8 @@ class 版本历史对话框(QDialog):
         self.resize(520, 440)
         # 独立窗口不继承父窗口样式表，必须显式套一份
         self.setStyleSheet(主窗.styleSheet())
+        # 主窗换主题时由 核工坊Qt.主窗._同步对话框样式 重新套一遍
+        self.跟主题 = True
         self._建界面()
 
     def _建界面(self):
@@ -214,6 +216,7 @@ class 关于对话框(QDialog):
         self.setModal(False)
         self.resize(460, 320)
         self.setStyleSheet(主窗.styleSheet())
+        self.跟主题 = True
         self._建界面()
 
     def _建界面(self):

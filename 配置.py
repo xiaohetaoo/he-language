@@ -37,11 +37,29 @@ def 读配置():
 
 
 def 存配置(配置):
+    """写配置。**先写临时文件再原子替换**。
+
+    以前直接 open(路径, "w")：写到一半崩溃、断电、或者杀进程，
+    磁盘上就留下半截 JSON。而 读配置() 解析失败时是「静默返回 {}」，
+    用户下次打开软件会发现主题、字号、行号、项目目录全被重置，
+    而且完全没有提示 —— 半截文件比没有文件更糟。
+    os.replace 在同一分区上是原子的：要么是旧内容，要么是新内容。
+    """
+    路径 = 配置路径()
     try:
         目录 = 配置目录()
         if not os.path.isdir(目录):
             os.makedirs(目录, exist_ok=True)
-        with open(配置路径(), "w", encoding="utf-8") as f:
+        临时 = 路径 + ".tmp"
+        with open(临时, "w", encoding="utf-8", newline="\n") as f:
             json.dump(配置, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(临时, 路径)
     except Exception:
-        pass
+        # 写不进去也不能让界面崩掉；顺手清掉可能残留的临时文件
+        try:
+            if os.path.exists(路径 + ".tmp"):
+                os.remove(路径 + ".tmp")
+        except OSError:
+            pass

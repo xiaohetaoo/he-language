@@ -29,6 +29,8 @@ class 版本控制窗口(QDialog):
         self.setModal(False)
         self.resize(620, 460)
         self.setStyleSheet(主窗.styleSheet())
+        # 主窗换主题时由 核工坊Qt.主窗._同步对话框样式 重新套一遍
+        self.跟主题 = True
         self._建界面()
         self.刷新()
 
