@@ -47,18 +47,53 @@ def 主():
     游.select(QTextCursor.Document)
     e.setTextCursor(游)
     应用.processEvents()
+    # 剪贴板得先探一下能不能用。
+    #
+    # 为什么必须探：有些环境里整个剪贴板就是不可用的 —— 不是「偶尔被
+    # 别的程序占用」，而是彻底打不开。实测在非交互会话里 Qt 报
+    #   OleSetClipboard: Failed ... COM error 0x800401d0: OpenClipboard 失败
+    # 连直接 clipboard().setText("ABC") 都读不回来；同一台机上
+    # PowerShell 的 Set-Clipboard 和 cmd 的 clip 也一并报「拒绝访问」。
+    # 这种时候「复制可用」和「粘贴恢复」必然失败，但那不是产品缺陷 ——
+    # 断言却把它记成回归失败，让人以为复制粘贴坏了。
+    #
+    # 这和本文件下面 [文件操作] 里的处理是同一条口径：那里早就写明
+    # 「只验证调用不抛异常，不校验剪贴板内容」。同一件事两套标准，
+    # 一边放过、一边判死，只会制造假红灯。
+    #
+    # 探法：写入一个探针串再读回来。读回来一致才认为剪贴板能用。
+    # 注意不能拿「读回来为空」当不可用 —— 空也可能是剪贴板里本来就是空的，
+    # 所以探针串用非空内容，且写入后立刻读。
+    剪贴板可用 = False
+    try:
+        应用.clipboard().setText("剪贴板探针_核工坊")
+        应用.processEvents()
+        剪贴板可用 = 应用.clipboard().text() == "剪贴板探针_核工坊"
+    except Exception:  # noqa: BLE001
+        剪贴板可用 = False
+
     e.copy()
     应用.processEvents()
-    查(bool(应用.clipboard().text()), "复制可用：%r" % 应用.clipboard().text()[:10])
+    if 剪贴板可用:
+        查(bool(应用.clipboard().text()), "复制可用：%r" % 应用.clipboard().text()[:10])
+    else:
+        print("  --  跳过「复制可用 / 粘贴恢复」：本机剪贴板不可用（OS 拒绝访问），")
+        print("      不是产品缺陷。要验这两项请在能正常复制粘贴的桌面会话里跑。")
     e.selectAll()
     应用.processEvents()
     查(e.textCursor().hasSelection(), "全选可用")
     e.cut()
     应用.processEvents()
     查(e.取文本() == "", "剪切清空了内容")
-    e.paste()
-    应用.processEvents()
-    查("测试" in e.取文本(), "粘贴恢复")
+    if 剪贴板可用:
+        e.paste()
+        应用.processEvents()
+        查("测试" in e.取文本(), "粘贴恢复")
+    else:
+        # 剪贴板不可用时 cut 已经把内容清空了，paste 补不回来 ——
+        # 这不是编辑器的错，所以不判失败。但要把内容还原，
+        # 免得后面的用例拿到空文档。
+        e.置文本("测试 内容")
 
     print("[撤销重做]")
     e.undo()
