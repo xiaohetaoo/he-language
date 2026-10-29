@@ -1980,7 +1980,13 @@ class 主窗(QMainWindow):
             if 部 is self or not getattr(部, "跟主题", False):
                 continue
             try:
-                部.setStyleSheet(表)
+                # 有 重套样式 的（版本控制面板：它还要按新色表重染 diff
+                # 的字符格式，光换样式表不够）优先走它，其余只换样式表。
+                重套 = getattr(部, "重套样式", None)
+                if callable(重套):
+                    重套()
+                else:
+                    部.setStyleSheet(表)
             except RuntimeError:
                 continue  # 底层对象已经销毁
 

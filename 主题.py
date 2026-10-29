@@ -61,6 +61,14 @@
     # 控制台
     "控制台底": "#1E1F22",
     "控制台字": "#BCBEC4",
+    # 版本控制面板的 diff 预览：增行 / 删行 的底色与字色。
+    # 底色刻意很淡（在 darcula 的 #1E1F22 上几乎只是「泛一点绿/红」），
+    # 因为整屏都是色块会盖过代码本身；靠左边的 +/− 符号和淡底色一起区分。
+    "diff增底": "#243A2B",
+    "diff删底": "#3D2528",
+    "diff增字": "#8FD4A0",
+    "diff删字": "#F09AA5",
+    "diff头字": "#7FB3F0",
 }
 
 # ---------------------------------------------------------------------------
@@ -108,6 +116,13 @@
     "图标状态点": "#067D17",
     "控制台底": "#FFFFFF",
     "控制台字": "#3A3F45",
+    # diff 增/删行。浅色底上要比深色主题更实一点，
+    # 否则白底上的淡绿淡红基本看不出来。
+    "diff增底": "#E6F5EA",
+    "diff删底": "#FBE9EC",
+    "diff增字": "#1A7F37",
+    "diff删字": "#B4232C",
+    "diff头字": "#2F6FD0",
 }
 
 主题集 = {"深色": 深色, "浅色": 浅色}
@@ -424,6 +439,17 @@ QLabel { background: transparent; }
 #sliderValue { color: __文本__; font-weight: bold; background: transparent; }
 #aboutTitle { color: __文本__; font-size: 15px; font-weight: bold; background: transparent; }
 #linkLabel  { color: __强调__; background: transparent; }
+/* 版本控制面板里的 diff 预览。
+   diff 是「只读的代码」，所以走编辑器的底色与等宽字体，
+   再加一条左边框把它和上面的文件列表分开。 */
+#diffView {
+    background: __编辑器__;
+    color: __次要文本__;
+    border: 1px solid __边框__;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: "__等宽字体__";
+}
 QTabWidget::pane { border: none; background: __窗口__; }
 
 /* 滑动条（设置里的字号）。

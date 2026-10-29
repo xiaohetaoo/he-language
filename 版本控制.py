@@ -231,3 +231,95 @@ def 摘要(状态字典):
     if 状态字典.get("落后"):
         尾 += "  ↓%d" % 状态字典["落后"]
     return "⎇ %s%s" % (分支, 尾)
+
+
+#: 单个文件的 diff 最多取这么多行，超了就截断并注明。
+#: 为什么要截：一个刚格式化过的大文件能产出几万行 diff，
+#: 全塞进 QPlainTextEdit 会让界面卡住。看全量还是去 git 客户端。
+diff行数上限 = 4000
+
+
+def 取差异(目录, 相对路径):
+    """取单个文件相对 HEAD 的 diff（只读），返回 (文本, 说明)。
+
+    返回的 文本 一律是统一 diff 格式；说明 是给用户看的一句话
+    （成功时为空串，失败时说明为什么没有 diff）。
+    """
+    if not 目录 or not os.path.isdir(目录):
+        return "", "目录不存在"
+    相对路径 = (相对路径 or "").strip()
+    if not 相对路径:
+        return "", "没有指定文件"
+
+    码, 出 = _跑(
+        目录,
+        ["diff", "--no-color", "--", 相对路径],
+    )
+    if 码 != 0:
+        return "", "读不到 diff（git 返回 %s）" % 码
+    文本 = 出
+
+    if not 文本.strip():
+        # 工作区相对暂存区没差异时，再看暂存区相对 HEAD 的
+        # （用户先 git add 过了，工作区就「看起来没改」）
+        码2, 出2 = _跑(
+            目录,
+            ["diff", "--cached", "--no-color", "--", 相对路径],
+        )
+        if 码2 == 0 and 出2.strip():
+            文本 = 出2
+            说明 = "（已暂存，显示的是暂存区相对上次提交的差异）"
+        else:
+            # 还是空：可能是未跟踪文件（git diff 完全不管它们）。
+            # 未跟踪时直接把文件内容按「新增」格式摆出来 ——
+            # 用户点开一个刚建的文件，看到空白一片毫无意义。
+            新 = _未跟踪内容(目录, 相对路径)
+            if 新 is not None:
+                return 新, "（未跟踪的新文件，下面是它的全部内容）"
+            return "", "这个文件没有可显示的差异（可能是未跟踪，或内容已提交）"
+    else:
+        说明 = ""
+
+    行集 = 文本.splitlines()
+    if len(行集) > diff行数上限:
+        文本 = "\n".join(行集[:diff行数上限])
+        文本 += "\n… 已截断（共 %d 行，只显示前 %d 行）" % (len(行集), diff行数上限)
+        说明 = (说明 + " " if 说明 else "") + "内容过长已截断"
+    return 文本, 说明
+
+def _未跟踪内容(目录, 相对路径, 上限=None):
+    """未跟踪文件的「新增」式 diff；不是未跟踪则返回 None。
+
+    只在文件能读、且确实是未跟踪时才返回内容。目录、二进制、
+    读不到一律返回 None，交给调用方给普通提示。
+
+    上限 默认取 diff行数上限，运行时读模块变量 —— 不写作默认参数，
+    因为默认参数在函数定义时就求值，会把值焊死在那个时刻。
+    """
+    if 上限 is None:
+        上限 = diff行数上限
+    全 = os.path.join(目录, 相对路径)
+    if not os.path.isfile(全):
+        return None
+    码, _出 = _跑(目录, ["ls-files", "--error-unmatch", "--", 相对路径])
+    if 码 == 0:
+        return None  # 已被 git 跟踪，不是未跟踪文件
+    try:
+        with open(全, "rb") as f:
+            原 = f.read()
+    except OSError:
+        return None
+    # 二进制文件不往文本框里塞
+    if b"\x00" in 原[:1024]:
+        return None
+    try:
+        文本 = 原.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    行集 = 文本.splitlines()
+    头 = ["--- /dev/null", "+++ b/%s" % 相对路径, "@@ 新文件 @@"]
+    体 = ["+%s" % 行 for 行 in 行集]
+    if len(行集) > 上限:
+        体 = 体[:上限]
+        体.append("… 已截断（共 %d 行，只显示前 %d 行）" % (len(行集), 上限))
+    return "\n".join(头 + 体)
