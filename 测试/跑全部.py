@@ -84,6 +84,34 @@ def 目录指纹():
 ]
 
 
+def 安全打印(文本):
+    """把子进程输出打到当前控制台，遇到编不进去的字符就降级。
+
+    这个函数是一次真实崩溃的产物：子进程输出里混进了非 UTF-8 字节，
+    `decode("utf-8", "replace")` 把它变成 U+FFFD（替换符），
+    而 Windows 控制台默认 GBK 又编不出 U+FFFD —— print 直接抛
+    UnicodeEncodeError。结果是：所有测试都跑完了、结果也赢了，
+    却在打印汇总时崩掉，退出码非 0，**看着像回归失败**。
+    回归工具的输出必须按最窄的编码假设来写：编不进去的字符降级成 ?，
+    替换符本身直接丢掉（它不携带任何信息）。
+    """
+    if "\ufffd" in 文本:
+        文本 = 文本.replace("\ufffd", "")
+    编码 = getattr(sys.stdout, "encoding", None) or "gbk"
+    出 = []
+    for 字符 in 文本:
+        try:
+            字符.encode(编码)
+            出.append(字符)
+        except (UnicodeEncodeError, LookupError):
+            出.append("?")
+    try:
+        print("".join(出))
+    except UnicodeEncodeError:
+        # 兜底：真编不出来就整个降级成 ASCII，绝不能因为打印而让回归报失败
+        print("".join(出).encode("ascii", "ignore").decode("ascii"))
+
+
 def 主():
     print("=" * 62)
     print("核工坊 · 全量回归测试")
@@ -115,7 +143,7 @@ def 主():
         # 只打印尾部若干行，前面太长的细节没必要刷屏
         行 = [行 for 行 in 合并.splitlines() if 行.strip()]
         for 行 in 行[-14:]:
-            print("  " + 行)
+            安全打印("  " + 行)
         if 结果.returncode != 0:
             失败项.append(名称)
 
