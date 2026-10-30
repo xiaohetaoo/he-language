@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 这里 = os.path.dirname(os.path.abspath(__file__))
@@ -248,6 +249,40 @@ class 转译测试(unittest.TestCase):
         self.assertIn(("bytearray", "内置函数"), 丙.条目)
         # 空路径不缓存，也不该抛
         self.assertIsNotNone(内核.取报告(None))
+        shutil.rmtree(目录, ignore_errors=True)
+
+    def test_用户手动删除的记录不复活(self):
+        """用户手工删掉 未定义.txt 里的一行，下次保存不能把它写回去。
+
+        共享实例（取报告）的代价是内存里那份会过期：以前它只在构造时
+        读一次，之后整份写回，于是用户删掉的行在保存时**复活**（实测）。
+        修法：取报告 时若磁盘签名变了就重读；磁盘是唯一真相。
+        """
+        目录 = tempfile.mkdtemp(prefix="核语言删除复活_")
+        路径 = os.path.join(目录, "未定义.txt")
+        表头 = "# 清单\n"
+        open(路径, "w", encoding="utf-8").write(
+            表头 + "ascii\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+                   "bytearray\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+        )
+        甲 = 内核.取报告(路径)
+        self.assertIn(("ascii", "内置函数"), 甲.条目)
+        # 模拟用户在大纲里删掉 ascii 那一行（时间戳要变）
+        time.sleep(0.02)
+        保留 = open(路径, encoding="utf-8").read().splitlines()
+        open(路径, "w", encoding="utf-8").write(
+            "\n".join(l for l in 保留 if not l.startswith("ascii")) + "\n"
+        )
+        乙 = 内核.取报告(路径)
+        self.assertIs(甲, 乙, "同一路径仍然必须是同一个实例")
+        self.assertNotIn(("ascii", "内置函数"), 乙.条目, "用户删掉的记录必须真的消失")
+        self.assertIn(("bytearray", "内置函数"), 乙.条目)
+        # 新记录照常能写进去
+        乙.记录("memoryview", "内置函数", "b.xht", 1, 1)
+        乙.保存()
+        复核 = 内核.未定义报告(路径)
+        self.assertNotIn(("ascii", "内置函数"), 复核.条目, "保存之后也不能复活")
+        self.assertIn(("memoryview", "内置函数"), 复核.条目)
         shutil.rmtree(目录, ignore_errors=True)
 
     def test_并入快照不重复计数(self):

@@ -190,6 +190,19 @@ def _构造高亮式():
 # ---------------------------------------------------------------------------
 
 
+def _无窗口标志():
+    """Windows 上起子进程别闪黑窗。
+
+    GUI 程序里 subprocess.Popen 不带这个标志，每起一个子进程都会
+    弹一下 cmd 黑窗。Qt 版早就统一走 版本控制.无窗口标志()，
+    但 tkinter 这条链路（运行用户程序、杀进程树）一直漏着 ——
+    实测打包后点「运行」会闪一个黑窗口。
+    """
+    if sys.platform != "win32":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
 def 默认项目目录():
     """启动时默认打开哪个目录当项目。
 
@@ -1107,10 +1120,35 @@ class 主窗口:
         if 进程 is None:
             return False
         if 进程.poll() is None:
-            try:
-                进程.kill()
-            except Exception:  # noqa: BLE001
-                pass
+            # 打包成 exe 之后必须**连整棵进程树一起杀**。
+            #
+            # PyInstaller 的单文件 exe 是「引导进程 + 真正跑应用的子进程」
+            # 两层结构，而 核工坊.exe 运行用户程序的方式正是自我重新调用
+            # （[exe, "--内核", 用户程序]）。只 kill() 引导层，真正在跑用户
+            # 代码的那个子进程会变成孤儿：继续死循环、继续吐输出，
+            # 还一直锁着 exe 文件。
+            #
+            # Qt 版早就踩过这个坑并修了（核工坊Qt._杀进程树 → taskkill /T），
+            # 但 tkinter 这条链路一直只 kill() 引导层 —— 于是测试/打包.py
+            # 打出来的 exe 仍带同一个缺陷。
+            杀干净 = False
+            if sys.platform == "win32":
+                try:
+                    跑 = subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(进程.pid)],
+                        capture_output=True,
+                        timeout=15,
+                        creationflags=_无窗口标志(),
+                    )
+                    杀干净 = 跑.returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    杀干净 = False
+            if not 杀干净:
+                # taskkill 不可用 / 进程已经没了 / 非 Windows → 退回普通 kill
+                try:
+                    进程.kill()
+                except Exception:  # noqa: BLE001
+                    pass
         收 = getattr(self, "_读线程", None)
         if 收 is not None and 收.is_alive():
             收.join(timeout=1.0)
@@ -2575,7 +2613,16 @@ class 主窗口:
         # 目标已存在时再确认一次 —— 覆盖是破坏性的。
         # asksaveasfilename 一般会自己问，但那是系统对话框的实现细节，
         # 不能只靠它。Qt 版（0.1.4）加了同样的防护，这里跟上。
-        if os.path.exists(路径) and 路径 != 文档.文件路径:
+        #
+        # 比较必须走 normcase：Windows 上 "C:/a.XHT" 和 "C:/A.xht" 是
+        # 同一个文件，直接 != 会判成「不同」，于是同一个文件重存时
+        # 跳过覆盖确认 —— 只是在原地写自己，但用户看到的是「另存为
+        # 没问我」；更糟的是磁盘被别处以另一种大小写写过时，判断会偏。
+        同一文件 = bool(文档.文件路径) and (
+            os.path.normcase(os.path.abspath(路径))
+            == os.path.normcase(os.path.abspath(文档.文件路径))
+        )
+        if os.path.exists(路径) and not 同一文件:
             if not messagebox.askyesno(
                 "确认覆盖", "“%s”已经存在，要覆盖吗？" % os.path.basename(路径),
                 parent=self.根,
@@ -2955,6 +3002,9 @@ class 主窗口:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=环境,
+                # 不设这个标志，Windows 上每点一次「运行」都会闪一下
+                # cmd 黑窗（GUI 程序里起控制台子进程的通病）。
+                creationflags=_无窗口标志(),
             )
         except OSError as e:
             self.控制台追加("启动失败：%s\n" % e, "错误")

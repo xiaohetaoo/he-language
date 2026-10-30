@@ -118,6 +118,22 @@ class 版本查询器(QObject):
         self._池.waitForDone(3000)
 
 
+def _还活着(对象):
+    """PySide6 的包装对象还在不在？
+
+    Python 层还拿着引用不代表底层 C++ 对象还在 —— 只要有人调过
+    deleteLater（关闭文档就是这么干的），下一轮事件循环它就被销毁，
+    之后读任何属性都会抛
+        RuntimeError: Internal C++ object (...) already deleted
+    所有「异步回调里再用旧引用」的地方都要先过这一关。
+    """
+    try:
+        from shiboken6 import isValid
+    except ImportError:       # 理论上不会发生，PySide6 一定带 shiboken6
+        return True
+    return isValid(对象)
+
+
 def 图标路径(名):
     return os.path.join(这里, "素材", 名)
 
@@ -607,6 +623,37 @@ class 主窗(QMainWindow):
             QApplication.instance().aboutToQuit.connect(self._标记退出中)
         except (AttributeError, RuntimeError):
             pass
+        # 系统关机 / 注销：桌面会话管理器不会等我们弹确认框。
+        # 默认行为是「拒绝 commitDataRequest」→ 桌面直接强杀进程，
+        # 未保存的改动无声无息消失（这条以前只是推演，一直没实证）。
+        # 正确做法是**接受请求**（让系统以为我们准备好了），
+        # 然后在 isSavingSession() 为真的这段时间里赶紧把有改动的文档
+        # 落盘 —— 用户没机会点任何按钮，能保住数据只有这一条路。
+        try:
+            应用 = QApplication.instance()
+            应用.commitDataRequest.connect(self._会话要关机)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _会话要关机(self, _管理器=None):
+        """桌面要关机/注销了：把还没保存的文档尽快写盘。
+
+        这里不弹框、不等用户 —— 会话管理器给的窗口期只有几秒，
+        弹一个框必然来不及回答，反而把文件全丢掉。
+        能存就直接存（未命名文档没有路径，只能放弃，存不了）。
+        存盘失败也继续走，不能因为一个文件写不进去就卡住关机。
+        """
+        self._正在退出 = True
+        for 编 in list(self.文档集):
+            if not _还活着(编) or not 编.已改:
+                continue
+            if not 编.文件路径:
+                continue      # 未命名，没地方写
+            try:
+                self.保存(编, 弹窗=False)
+            except Exception:  # noqa: BLE001
+                continue
+        self._收尾退出()
 
     def _标记退出中(self):
         self._收到退出信号 = True
@@ -1249,7 +1296,14 @@ class 主窗(QMainWindow):
         # 系统的「另存为」对话框一般会自己问「要不要覆盖」，但那依赖原生对话框
         # 的行为（Qt 用非原生实现时不问）。这里自己兜住底 ——
         # 覆盖是破坏性的，不该只靠对话框的实现细节。
-        if os.path.exists(路径) and 路径 != os.path.abspath(编.文件路径 or ""):
+        #
+        # 比较走 normcase：Windows 不区分大小写，"a.XHT" 与 "a.xht"
+        # 是同一个文件；直接字符串比较会判成「不同文件」，于是同一个
+        # 文件重存时跳过确认。tkinter 版也按同一口径修了。
+        同一文件 = bool(编.文件路径) and (
+            os.path.normcase(路径) == os.path.normcase(os.path.abspath(编.文件路径))
+        )
+        if os.path.exists(路径) and not 同一文件:
             答 = QMessageBox.question(
                 self, "确认覆盖", "「%s」已经存在，要覆盖吗？" % os.path.basename(路径),
                 QMessageBox.Yes | QMessageBox.No,
@@ -1644,12 +1698,22 @@ class 主窗(QMainWindow):
         """
         if not 文本:
             return
+        # 先记下「用户原来是不是停在底部附近」，再插入。
+        #
+        # 以前无条件 setValue(条.maximum())：用户把日志往上翻着看，
+        # 每来一行输出就被拽回底部，根本没法读（实测 201/201 次都被拉回）。
+        # 只有本来就贴着底部时才跟随；已经翻上去的，保持用户的位置。
+        条 = self.控制台.verticalScrollBar()
+        if 条 is not None:
+            贴底 = 条.value() >= 条.maximum() - 4
+        else:
+            贴底 = True
         游 = self.控制台.textCursor()
         游.movePosition(QTextCursor.End)
         self.控制台.setTextCursor(游)
         self.控制台.insertPlainText(文本)
-        条 = self.控制台.verticalScrollBar()
-        条.setValue(条.maximum())
+        if 贴底 and 条 is not None:
+            条.setValue(条.maximum())
 
     def 清空控制台(self):
         self.控制台.clear()
@@ -1761,6 +1825,8 @@ class 主窗(QMainWindow):
             self._版本历史 = 帮助窗口.版本历史对话框(
                 self, 核.版本, self.项目目录
             )
+            # 同上：非模态窗口必须自回收，否则版本历史每开一次漏一个。
+            self._版本历史.setAttribute(Qt.WA_DeleteOnClose, True)
             self._版本历史.show()
             self._版本历史.raise_()
         except Exception as e:  # noqa: BLE001
@@ -1771,6 +1837,8 @@ class 主窗(QMainWindow):
             import 帮助窗口
 
             self._关于 = 帮助窗口.关于对话框(self, 核.版本)
+            # 同上：非模态窗口必须自回收，否则「关于」每开一次漏一个。
+            self._关于.setAttribute(Qt.WA_DeleteOnClose, True)
             self._关于.show()
             self._关于.raise_()
         except Exception as e:  # noqa: BLE001
@@ -1881,6 +1949,8 @@ class 主窗(QMainWindow):
             import 版本控制窗口
 
             self._版本窗 = 版本控制窗口.版本控制窗口(self, self.项目目录)
+            # 同上：版本控制面板每开一次也漏一个隐藏 QDialog。
+            self._版本窗.setAttribute(Qt.WA_DeleteOnClose, True)
             self._版本窗.show()
             self._版本窗.raise_()
         except Exception as e:  # noqa: BLE001
@@ -1891,7 +1961,10 @@ class 主窗(QMainWindow):
             import 快速打开
 
             self._快速 = 快速打开.快速打开(self)
+            # exec() 是模态的，返回后这个对象就该被回收。
+            # 以前只 exec 不 deleteLater，每按一次 Ctrl+P 就漏一个 QDialog。
             self._快速.exec()
+            self._快速.deleteLater()
         except Exception as e:  # noqa: BLE001
             self.状态("快速打开失败：%s" % e)
 
@@ -1906,6 +1979,9 @@ class 主窗(QMainWindow):
             import 查找对话框
 
             self._查找窗 = 查找对话框.查找对话框(self, self.当前)
+            # 非模态窗口：关掉要能自己回收，否则每按一次 Ctrl+F
+            # 就常驻一个隐藏 QDialog（实测 5 开 5 残留）。
+            self._查找窗.setAttribute(Qt.WA_DeleteOnClose, True)
             self._查找窗.show()
             self._查找窗.raise_()
         except Exception as e:  # noqa: BLE001
@@ -2383,14 +2459,20 @@ class 主窗(QMainWindow):
         """
         self.close()
 
-    def _收尾退出(self):
-        """停子进程、停后台线程、写配置。"""
-        self.停止(静默=True)
-        查询器 = getattr(self, "_版本查询", None)
-        if 查询器 is not None:
-            # 等后台的 git 查询收尾再退出，免得工作线程在解释器拆栈时
-            # 还回来调 _完成（那时窗口对象可能已经先没了）。
-            查询器.停()
+    def _收尾退出(self, 真退出=True):
+        """停子进程、停后台线程、写配置。
+
+        `真退出=False` 用于「先把窗口 accept 掉、再问要不要保存」的那一步：
+        那时用户可能点「取消」把窗口拉回来继续用，所以**只写配置，
+        不碰任何还活着的后台东西** —— 一旦停了就再也起不回来了。
+        """
+        if 真退出:
+            self.停止(静默=True)
+            查询器 = getattr(self, "_版本查询", None)
+            if 查询器 is not None:
+                # 等后台的 git 查询收尾再退出，免得工作线程在解释器拆栈时
+                # 还回来调 _完成（那时窗口对象可能已经先没了）。
+                查询器.停()
         self.存配置()
 
     def _逐个处理未保存(self):
@@ -2448,6 +2530,14 @@ class 主窗(QMainWindow):
            安全的做法：先 accept() 让窗口关掉，**然后**再弹非模态框；
            用户点「取消」就把窗口重新 show() 回来。
         """
+        # 已经问过一轮了（_真正关窗 里置的位）→ 直接放行，别再盘问一遍。
+        # 不认这个标志的话，用户点「不保存」之后 _真正关窗 的 close()
+        # 会再触发一次本函数，把刚问完的文档**又弹一遍**。
+        if getattr(self, "_正在退出", False):
+            self._收尾退出()
+            事件.accept()
+            return
+
         # 没有未保存的改动 → 直接关，不用打扰用户
         if not any(编.已改 for 编 in self.文档集):
             self._收尾退出()
@@ -2456,11 +2546,22 @@ class 主窗(QMainWindow):
 
         # 有未保存的改动 → 先让窗口关掉（accept），再弹非模态框问。
         # 不能 ignore()：那会把程序自己的 quit() 也卡住。
+        # ⚠️ 这里**不能**调 查询器.停()：用户随时可能点「取消」把窗口拉回来，
+        # 那时版本状态就再也不刷新了（实测「取消」后 查() 被 _停 挡掉，
+        # 顶行版本号与保存后的刷新全部失效）。真正停线程放到 _真正关窗。
         事件.accept()
-        self._收尾退出()
+        self._收尾退出(真退出=False)
         if getattr(self, "_关窗确认中", False):
             return          # 已经在问了，别再弹第二个
         self._关窗确认中 = True
+        # 一次性拍下「这一轮要问哪些文档」。
+        #
+        # 不能每轮都重新扫 self.文档集：点「不保存」只是放弃内存里的改动，
+        # 文档本身还留着（用户可能点「取消」把窗口拉回来继续编辑），
+        # 它的 已改 仍是 True —— 于是下一轮又把同一个文档问一遍，
+        # 无限重弹，用户永远退不出去。实测连弹 6 次同一个框。
+        # 拍成快照之后，每个文档在这一轮里只问一次，答完就出队。
+        self._关窗待问 = [d for d in self.文档集 if _还活着(d) and d.已改]
         self._问要不要保存()
 
     def _问要不要保存(self):
@@ -2473,8 +2574,15 @@ class 主窗(QMainWindow):
         用户选「取消」时把窗口重新显示出来 —— 刚才为了不卡住退出流程
         已经 accept() 让它关上了。
         """
-        待处理 = [编 for 编 in self.文档集 if 编.已改]
+        # 从 closeEvent 拍下的快照里取下一份要问的。
+        # 快照本身每轮都在出队（见 选好了），所以同一个文档只会被问一次 ——
+        # 这是「点不保存后无限重弹」的根治点。
+        # 顺便判活：用户在确认框开着时关掉了某份文档，它的包装对象
+        # 已经被 deleteLater 销毁，读 已改 会抛 RuntimeError。
+        待处理 = [d for d in getattr(self, "_关窗待问", []) if _还活着(d)]
+        self._关窗待问 = 待处理
         if not 待处理:
+            self._关窗待问 = []
             self._关窗确认中 = False
             self._真正关窗()
             return
@@ -2497,30 +2605,56 @@ class 主窗(QMainWindow):
             self.activateWindow()
 
         def 选好了(答):
+            # 这个回调是**异步**的：确认框开着的期间用户完全可以继续操作主窗口 ——
+            # 关掉别的标签、把这一份删掉、甚至换项目目录。
+            # 实测：确认框开着时把这份文档关掉，再点「保存」，
+            # 编 背后的 C++ 对象已被 deleteLater 销毁，取文本时抛出
+            #   RuntimeError: libshiboken: Internal C++ object (编辑器) already deleted
+            # 而且异常打断流程、_关窗确认中 卡在 True ——
+            # 之后每次关窗 accept 完就直接 return，**不再弹框**，改动静默丢失。
+            # 所以：入口先判活，复位一律放 finally。
+            交班 = False
             框.deleteLater()
-            if 答 == QMessageBox.Cancel:
-                self._关窗确认中 = False
-                拉回来()
-                return
-            if 答 == QMessageBox.Save and not self.保存(编):
-                self._关窗确认中 = False
-                拉回来()
-                return
-            # 这一份处理完了，接着问下一份。
-            # **必须延迟到下一轮事件循环**，不能在这里直接递归调 ——
-            # 这里还在那个确认框自己的事件循环里，直接再 open() 一个框
-            # 会形成嵌套的模态/非模态循环，退出流程就卡在里面出不来。
-            # 实测（冒烟测试）就是这样挂死的：栈上是
-            #   收 → closeEvent → _问要不要保存 → 选好了 → _问要不要保存
-            self._关窗确认中 = False
-            QTimer.singleShot(0, self._问要不要保存)
+            try:
+                if 答 == QMessageBox.Cancel:
+                    拉回来()
+                    return
+                if _还活着(编) and 答 == QMessageBox.Save and not self.保存(编):
+                    拉回来()
+                    return
+                # 这一份问过了（保存了 / 放弃了 / 它已经不在了）→ 出队，
+                # 然后接着问剩下那些文档。
+                #
+                # **必须延迟到下一轮事件循环**，不能在这里直接递归调 ——
+                # 这里还在那个确认框自己的事件循环里，直接再 open() 一个框
+                # 会形成嵌套的模态/非模态循环，退出流程就卡在里面出不来。
+                # 实测（冒烟测试）就是这样挂死的：栈上是
+                #   收 → closeEvent → _问要不要保存 → 选好了 → _问要不要保存
+                交班 = True
+                # 已经处理过这一份了，从待问清单里摘掉 —— 不摘的话下一轮
+                # 又会把它当成「还没问」的文档，点「不保存」后无限重弹。
+                self._关窗待问 = [d for d in getattr(self, "_关窗待问", []) if d is not 编]
+                QTimer.singleShot(0, self._问要不要保存)
+            finally:
+                # 没交班就说明这一轮结束了（取消 / 保存失败拉回来 / 抛异常），
+                # 守卫必须松开 —— 松不开守卫会让下次关窗静默丢改动。
+                # 交班那条腿的下一轮由 _问要不要保存 自己维护标志，这里别碰。
+                if not 交班:
+                    self._关窗确认中 = False
 
         框.finished.connect(选好了)
         框.open()
         self._关窗框 = 框
 
     def _真正关窗(self):
-        """确认完了：收尾并关掉窗口。"""
+        """确认完了：收尾并关掉窗口。
+
+        ⚠️ `_正在退出` 必须先置位**再** close()：close() 会同步回调
+        closeEvent，而 closeEvent 看到还有「已改」的文档就会再问一轮 ——
+        点「不保存」的文档内存里仍是 已改=True，于是刚问完的窗口
+        又弹一次。实测：单份文档点「不保存」弹 2 次，三份文档弹 8 次。
+        closeEvent 开头靠这个标志直接放行，不再重复盘问。
+        """
         self._收尾退出()
         self._正在退出 = True
         self.close()

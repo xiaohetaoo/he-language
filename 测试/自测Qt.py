@@ -390,9 +390,16 @@ def 主():
 
         _dwm = ctypes.WinDLL("dwmapi")
         _v = _wt.DWORD()
-        _dwm.DwmGetWindowAttribute(int(_窗.winId()), 33, ctypes.byref(_v),
-                                  ctypes.sizeof(_v))
-        检查(_v.value == 1, "最大化时 DWM 圆角偏好=1 不圆角（实际 %d）" % _v.value)
+        # 必须先看 HRESULT。DwmGetWindowAttribute 在 offscreen 平台、
+        # 或窗口还没有真实句柄时返回非 0，而且**不会**写目标值 ——
+        # 于是 _v.value 仍是预设的 0，断言「==1」就成了假失败（实测）。
+        # 拿到失败码就跳过这条，不要报错。
+        _r = _dwm.DwmGetWindowAttribute(int(_窗.winId()), 33, ctypes.byref(_v),
+                                        ctypes.sizeof(_v))
+        if _r != 0:
+            print("  (跳过 DWM 检查：DwmGetWindowAttribute 返回 0x%08X)" % _r)
+        else:
+            检查(_v.value == 1, "最大化时 DWM 圆角偏好=1 不圆角（实际 %d）" % _v.value)
     except Exception as _e:  # noqa: BLE001
         print("  (跳过 DWM 检查：%s)" % _e)
     _窗.showNormal()

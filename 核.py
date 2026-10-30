@@ -24,7 +24,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.1.6"
+版本 = "0.1.7"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -305,10 +305,28 @@ read readline readlines write writelines close seek tell flush
     "模块找不到": "ModuleNotFoundError",
     "语法错误": "SyntaxError",
     "未绑定错误": "UnboundLocalError",
+    # —— 补齐常用异常的中文名 ——
+    # 这几个是最常撞见的（跑崩了、权限不够、文件已存在、目录当文件用），
+    # 但以前表里没有翻译，用户写 `核异常 RuntimeError：` 时翻译器
+    # 认不出这是异常类型，直接把它当普通标识符 → 变成 NameError，
+    # 报错信息完全指错方向。核对过：写中文名和写英文原名结果一致。
+    "判错": "RuntimeError",
+    "溢出错误": "OverflowError",
+    "解码错误": "UnicodeDecodeError",
+    "编码错误": "UnicodeEncodeError",
+    "权限错误": "PermissionError",
+    "已存在错误": "FileExistsError",
+    "是目录错误": "IsADirectoryError",
+    "不是目录错误": "NotADirectoryError",
+    "连接错误": "ConnectionError",
+    "超时错误": "TimeoutError",
+    "内存错误": "MemoryError",
+    "执行中断": "KeyboardInterrupt",
 }
 
 #: 常见异常的中文提示。
 异常说明 = {
+    "Exception": "所有异常的总类；写 `核异常 错误：` 能兜住任何异常",
     "NameError": "用到了没定义的变量或函数，检查名字是否写错",
     "UnboundLocalError": "变量在赋值前就被使用了",
     "ZeroDivisionError": "除数不能为 0",
@@ -326,6 +344,19 @@ read readline readlines write writelines close seek tell flush
     "StopIteration": "迭代已经结束",
     "AssertionError": "断言失败",
     "OSError": "文件或系统调用出错",
+    # —— 补齐说明（与上面的新中文名一一对应）——
+    "RuntimeError": "程序运行到不该到的地方，看报错行号的上下文",
+    "OverflowError": "数值太大，超出了这个类型能表示的范围",
+    "UnicodeDecodeError": "读进来的字节不是 UTF-8 文本，文件编码不对",
+    "UnicodeEncodeError": "要写的字符在目标编码里不存在",
+    "PermissionError": "没有权限操作这个文件或目录（只读、被占用、或在受保护目录）",
+    "FileExistsError": "目标已经存在，换一个名字或先删掉",
+    "IsADirectoryError": "这里要的是文件，给的是个目录",
+    "NotADirectoryError": "这里要的是目录，给的是个文件",
+    "ConnectionError": "网络连不上，检查地址、防火墙和网络状态",
+    "TimeoutError": "操作超时，对方没有在限定时间内响应",
+    "MemoryError": "内存不够了，数据量太大",
+    "KeyboardInterrupt": "被手动中断（按了停止或 Ctrl+C）",
 }
 
 
@@ -537,6 +568,7 @@ class 未定义报告:
     def __init__(self, 路径):
         self.路径 = 路径
         self.条目 = {}
+        self._已见签名 = None
         self.读取()
 
     def 读取(self):
@@ -560,6 +592,39 @@ class 未定义报告:
             except ValueError:
                 次数 = 1
             self.条目[(写法, 类别)] = {"次数": 次数, "首次": 首次, "最近": 最近}
+        self._已见签名 = self._磁盘签名()
+
+    def _磁盘签名(self):
+        """磁盘上这份清单的「版本指纹」：mtime + 大小。不存在返回 None。"""
+        if not self.路径:
+            return None
+        try:
+            信息 = os.stat(self.路径)
+        except OSError:
+            return None
+        return (信息.st_mtime_ns, 信息.st_size)
+
+    def 刷新(self):
+        """磁盘被外部改过就重读，返回是否真的重读了。
+
+        为什么要这个：取报告 给所有人发同一个实例，而这份清单是
+        用户会**手工编辑**的 —— 删掉一行就表示「这条已经处理了」。
+        以前实例只在构造时读一次，之后整份写回时内存里那条还在，
+        于是用户删掉的行在下次保存时**复活**（实测：删掉的 ascii 行
+        下一次运行又回来了）。磁盘才是唯一真相，内存只是它的缓存。
+
+        只在签名真的变了才重读：这样连续两次取报告（中间没人动文件）
+        不会平白丢掉已经记在内存、但还没落盘的条目。
+        """
+        签名 = self._磁盘签名()
+        if 签名 == getattr(self, "_已见签名", None):
+            return False
+        self.条目 = {}
+        self.读取()
+        # 读不到文件（被删了）时也别留着旧内容 —— 那就是「用户清空了清单」。
+        if 签名 is None:
+            self._已见签名 = None
+        return True
 
     def 记录(self, 写法, 类别, 文件, 行, 列):
         位置 = "%s:%d:%d" % (self._相对(文件), 行, 列)
@@ -633,6 +698,7 @@ class 未定义报告:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(临时, self.路径)
+            self._已见签名 = self._磁盘签名()
         except OSError:
             try:
                 if os.path.exists(临时):
@@ -663,6 +729,10 @@ def 取报告(路径):
         if 报 is None:
             报 = 未定义报告(路径)
             _报告集[键] = 报
+        else:
+            # 磁盘被用户手工改过（删行/加行）就重读 —— 否则内存里那条
+            # 已删掉的记录会在下次保存时复活。见 未定义报告.刷新。
+            报.刷新()
         return 报
 
 

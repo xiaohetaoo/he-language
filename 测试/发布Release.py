@@ -5,12 +5,14 @@ GitHub 的 Release 与附件接口需要 Personal Access Token
 （SSH 密钥只能用于 git push，不能调 API）。
 
 用法：
-    set GH_TOKEN=github_pat_xxx
+    set GH_TOKEN=github_pat_xxx        ← 推荐：环境变量，不进 shell 历史
     python 测试/发布Release.py
 
-    python 测试/发布Release.py --token github_pat_xxx
+    python 测试/发布Release.py --凭据    ← 从 git 凭据管理器自动取
     python 测试/发布Release.py --草稿              先建草稿，预览后再发布
     python 测试/发布Release.py --源码包            额外附上源码 zip
+
+    python 测试/发布Release.py --token xxx        应急用；令牌会留在 shell 历史里
 
 行为约定：
   · exe 不存在就直接失败 —— 发布一个没有 exe 的 Release 没有意义
@@ -342,7 +344,18 @@ def 主():
     参数 = sys.argv[1:]
     令牌 = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if "--token" in 参数:
-        令牌 = 参数[参数.index("--token") + 1]
+        # ⚠️ 命令行里带令牌会留在 shell 历史里：
+        # PowerShell 的 Get-History、PSReadLine 的 PersistentHistory
+        # 都会把整行存下来，令牌等于明文落盘。以前这里直接接受它，
+        # 而且文档示例就是这么教的。仍然支持（应急时确实方便），
+        # 但明确提示并推荐另外两条路。
+        _idx = 参数.index("--token")
+        令牌 = 参数[_idx + 1] if _idx + 1 < len(参数) else ""
+        print("⚠ 令牌来自命令行参数，它会被记进 shell 历史（PowerShell 的 "
+              "Get-History 与 PSReadLine 历史文件都会存）。")
+        print("  下次建议改用：  set GH_TOKEN=...   或   --凭据")
+        print("  用完请到 GitHub 撤销这个令牌并重新生成。")
+        print()
     if not 令牌 and "--凭据" in 参数:
         令牌 = 从凭据管理器取令牌()
         if 令牌:

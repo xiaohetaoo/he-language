@@ -12,7 +12,7 @@ import re
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen, QTextBlockUserData,
-    QTextCharFormat, QTextCursor, QSyntaxHighlighter, QKeyEvent,
+    QTextCharFormat, QTextCursor, QTextFormat, QSyntaxHighlighter, QKeyEvent,
 )
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
@@ -424,8 +424,26 @@ class 编辑器(QPlainTextEdit):
             )
 
     def 换主题(self):
-        self.高亮.重建()
-        self.高亮.rehighlight()
+        # 换主题只改配色，一个字符都没动 —— 不能因此把文档标成「已改」。
+        #
+        # 为什么会被标脏：rehighlight() 会重跑整个文档的高亮，而它内部
+        # 给每个块重设格式会触发 QSyntaxHighlighter 的 contentsChange，
+        # 再经 Qt 转成 textChanged → _文本变化() → 已改 = True。
+        # 实测：打开文件（已改 False）→ 换浅色主题 → 已改 True，
+        # 每个标签都挂上 ●、退出时被挨个问要不要保存。
+        # 用 _载入中 兜住：_文本变化 与 _补记已改 都靠它早退（它们本来是
+        # 给「从磁盘装载/置文本」用的同一套闸门，语义正好吻合 ——
+        # 「这期间文档内容的变化不算用户改动」）。
+        原已改 = self.已改
+        self._载入中 = True
+        try:
+            self.高亮.重建()
+            self.高亮.rehighlight()
+        finally:
+            self._载入中 = False
+            # 兜底还原：即使将来有人把 _文本变化 里的 _载入中 判断去掉，
+            # 换主题也不该改带走已改状态。
+            self.已改 = 原已改
         self.行号.update()
         # 应用样式表会重置 viewportMargins，必须重设，否则文字会贴到最左边
         self.重设行号边距()
@@ -501,8 +519,8 @@ class 编辑器(QPlainTextEdit):
     #   不比函数体少见。PyCharm 两种都折，这里跟上。
     #
     #   注意括号区域的**边界是随内容变的**：在区域内加一个 `[` 会把
-    #   收尾行推后。所以它的折叠区不能像冒号块那样复用缓存（见 _缓存边界
-    #   里 区类 == "括号" 那一支）。
+    #   收尾行推后。所以它的折叠区每次都要现算，不能像冒号块那样
+    #   复用缓存 —— 见 折叠区() 与 _算括号区()。
 
     #: 括号字符 → 进/出。全角括号也算 —— 内核用 NFKC 把它们统一成半角，
     #: 编辑器这边必须同一个口径，否则「全角括号能写」的代码却折不了。
@@ -945,7 +963,13 @@ class 编辑器(QPlainTextEdit):
         色 = self.主窗.主题
         选区 = QTextEdit.ExtraSelection()
         选区.format.setBackground(QColor(色["当前行"]))
-        选区.format.setProperty(0x100000, True)  # FullWidthSelection
+        # 整行填充（而不是只给字上底色）。
+        # ⚠️ 这里以前写的是魔数 0x100000（=1048576），那是**错的**：
+        # QTextFormat.FullWidthSelection 的真实值是 24576（0x6000）。
+        # 查不到的属性 Qt 直接忽略，于是当前行高亮只剩「文字背景色」——
+        # 采样实测整行像素全是编辑器底色，等于完全没有这个功能。
+        # 用枚举本身，别再抄魔数。
+        选区.format.setProperty(QTextFormat.FullWidthSelection, True)
         选区.cursor = self.textCursor()
         选区.cursor.clearSelection()
         self.setExtraSelections([选区])
@@ -1330,17 +1354,32 @@ class 编辑器(QPlainTextEdit):
         # 先算每一行「哪些字符在字符串里」。
         # 多行三引号串会跨块，所以要按块序号记住「上一块结束时字符串还没闭合」。
         串行 = self._标出字符串的块(块们)
-        前缀们 = [
-            None if 串行.get(b.blockNumber()) else self._取注释前缀(b.text())
-            for b in 有内容
+        # 被字符串保护、一个字符都不许动的行，**不参与「是否全是注释」的判定**。
+        #
+        # 以前这里给它们记了个 None 并算进 all()：
+        #   前缀们 = [None if 串行.get(号) else self._取注释前缀(文) ...]
+        #   全注释 = all(p is not None for p in 前缀们)
+        # 只要有**一行**被保护，全注释就恒为 False —— 永远走「加注释」分支，
+        # 而「已经注释的行不再套第二层」那条规矩又把加过的行跳过。
+        # 结果就是：能加上注释，却再也去不掉。
+        # 实测选区含 `核说("hi")` 这类字符串行时，连切三次内容一动不动。
+        受保护 = [b.blockNumber() in 串行 for b in 有内容]
+        前缀 = [
+            None if 保护 else self._取注释前缀(b.text())
+            for b, 保护 in zip(有内容, 受保护)
         ]
-        # 全注释 = 每一行都**已经是注释行**。
-        # 以前只判「全是同一种前缀」，于是
+        # 全注释 = 每一行**能动**的都已经是注释行。
+        #   · 被保护的行不算（它们本来就动不了，算进来会锁死上面那种状态）；
+        #   · 全部行都被保护时，可动集合是空的 —— all(空) 为 True，
+        #     走「去注释」分支，而那里每一行都会被 continue 跳过，等于什么都没做。
+        #     这正好是我们要的：整段都是字符串时，切换注释是个安全的空操作。
+        # 另外「以前只判全是同一种前缀」的旧毛病也要保住：
         #   核说(1)          ← 代码
         #   核核 已有         ← 已经是注释
         # 这种混合块会被当成「要加注释」，给已经有注释的那行**再加一层** ——
         # 变成「核核 核核 已有」，第二次切换又只去掉一个，注释再也去不掉。
-        全注释 = all(p is not None for p in 前缀们)
+        可动前缀 = [p for p, 保护 in zip(前缀, 受保护) if not 保护]
+        全注释 = all(p is not None for p in 可动前缀)
         游标 = self.textCursor()
         游标.beginEditBlock()
         for 块 in 块们:

@@ -187,14 +187,17 @@ class 版本控制窗口(QDialog):
         if 现在 is None:
             self.差异.clear()
             return
+        # 复用同一个定时器。
+        # 以前每次换选都新建一个 QTimer(self)，把旧的 stop() 掉就不再管 ——
+        # stop 只停计时、不销毁对象，而它的父窗口一直活着，于是方向键
+        # 上下翻 N 次就积 N 个 QTimer（实测换选 5 次漏 5 个）。
         任务 = getattr(self, "_看延时", None)
-        if 任务 is not None:
-            任务.stop()
-        任务 = QTimer(self)
-        任务.setSingleShot(True)
-        任务.timeout.connect(self._显示差异)
+        if 任务 is None:
+            任务 = QTimer(self)
+            任务.setSingleShot(True)
+            任务.timeout.connect(self._显示差异)
+            self._看延时 = 任务
         任务.start(0)
-        self._看延时 = 任务
 
     def _显示差异(self):
         相对 = getattr(self, "_待看", None)

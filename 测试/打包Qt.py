@@ -30,6 +30,30 @@ def 找解释器():
     return sys.executable or "python"
 
 
+def 清理残留进程(名="核工坊Qt"):
+    """打包前先杀掉还在跑的旧 exe。
+
+    PyInstaller 要覆盖 dist 里那个 exe，若上一次打出来的程序还开着
+    （或者运行用户程序时留下的孤儿进程还活着），文件就被锁住，
+    构建会在链接/替换那一步失败，报一句很难懂的
+    「Permission denied」。与其让用户去猜，不如打包前主动清掉。
+    只杀同名进程，不会牵连其他程序。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        r = subprocess.run(
+            ["taskkill", "/F", "/IM", 名 + ".exe"],
+            capture_output=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    # 返回码 128（找不到进程）是正常情况：本来就没在跑。
+    if r.returncode == 0:
+        print("已结束残留的 %s.exe" % 名)
+
+
 def 确保图标():
     素材 = os.path.join(根目录, "素材")
     需要 = ["核图标_%d.png" % n for n in (16, 24, 32, 48, 64, 128, 256)]
@@ -69,136 +93,18 @@ def 主():
         print("\n回归测试没过，已停止打包。")
         return 1
 
-    # Qt 版入口：一个极小的启动文件，把参数转给 核工坊Qt
+    # 先清掉还在跑的旧 exe：它锁着 dist 里的文件，覆盖会失败。
+    清理残留进程()
+
+    # Qt 版入口：_启动Qt.py 是仓库里**实际存在、被 git 跟踪**的文件，
+    # 打包时不再用内嵌字符串模板重新生成它 —— 那是双事实源：
+    # 模板和文件各自演化，改一边必漏另一边，而打包只认模板，
+    # 于是「我明明改了入口，打出来的 exe 却没变」这类问题极难查。
+    # 现在只用文件本身；缺了就直接报错，不偷偷生成一份。
     入口 = os.path.join(根目录, "_启动Qt.py")
-    with open(入口, "w", encoding="utf-8", newline="\n") as f:
-        f.write(
-            "# -*- coding: utf-8 -*-\n"
-            '"""Qt 版打包入口。"""\n'
-            "import os\nimport sys\n\n"
-            "这里 = os.path.dirname(os.path.abspath(__file__))\n"
-            "if 这里 not in sys.path:\n    sys.path.insert(0, 这里)\n\n"
-            "def 主():\n"
-            "    基 = getattr(sys, '_MEIPASS', 这里)\n"
-            "    for 子 in ('', '素材'):\n"
-            "        目录 = os.path.join(基, 子) if 子 else 基\n"
-            "        if os.path.isdir(目录) and 目录 not in sys.path:\n"
-            "            sys.path.insert(0, 目录)\n"
-            "    参数 = sys.argv[1:]\n"
-            "    if 参数 and 参数[0] == '--自检界面':\n"
-            "        目录 = 参数[1] if len(参数) > 1 else '.'\n"
-            "        return _自检(目录)\n"
-            "    if 参数 and 参数[0] == '--内核':\n"
-            "        # 作为解释器运行用户程序：exe 自带内核，目标机器无需 Python\n"
-            "        # 必须走 主入口()，它内部会调 准备输出()/准备输入()。\n"
-            "        # 直接调 命令行() 会绕过这两个：exe 里 stdin 是 gbk，\n"
-            "        # 用户中文输入会变成乱码（「小明」→「灏忔槑」）；\n"
-            "        # stdout 也保持系统编码，管道读取时同样是乱码。\n"
-            "        import 核\n"
-            "        sys.argv = ['核'] + 参数[1:]\n"
-            "        return 核.主入口()\n"
-            "    import 核工坊Qt\n"
-            "    return 核工坊Qt.启动()\n\n"
-            "def _自检(输出目录):\n"
-            "    import json, time\n"
-            "    from PySide6.QtWidgets import QApplication, QLabel as _QLabel\n"
-            "    import 核工坊Qt, 核\n"
-            "    基 = getattr(sys, '_MEIPASS', 这里)\n"
-            "    os.makedirs(输出目录, exist_ok=True)\n"
-            "    应用 = QApplication([])\n"
-            "    窗 = 核工坊Qt.主窗()\n"
-            "    窗.show()\n"
-            "    import time as _t\n"
-            "    截止 = _t.time() + 3.0\n"
-            "    while _t.time() < 截止:\n"
-            "        应用.processEvents()\n"
-            "        _t.sleep(0.02)\n"
-            "    报告 = {\n"
-            "        '运行方式': 'Qt 打包 exe',\n"
-            "        '界面版本': 核.版本,\n"
-            "        '顶行': 窗.顶行.项目名.text(),\n"
-            "        '竖条按钮': list(窗.竖条.钮们),\n"
-            "        '竖条图标齐全': all(not b.pixmap().isNull() for b in 窗.竖条.钮们.values()),\n"
-            "        '顶行有设置': any('设置' in c.toolTip() for c in 窗.顶行.findChildren(_QLabel)),\n"
-            "        '标签数': 窗.标签栏.count(),\n"
-            "        '图标存在': os.path.exists(os.path.join(基, '素材', '核图标.ico')),\n"
-            "        '对照表行数': len(窗.对照.toPlainText().splitlines()),\n"
-            "        '启动字号': 窗.字号,\n"
-            "    }\n"
-            "    # 字号必须真的改变渲染尺寸（QSS 优先级坑）：\n"
-            "    # 打包后如果 QSS 里的 font-size 占位符没被替换，\n"
-            "    # 行高会恒等于 16，用户改字号看不到任何变化。\n"
-            "    try:\n"
-            "        _编 = 窗.当前\n"
-            "        窗.设字号(10)\n"
-            "        应用.processEvents()\n"
-            "        _小 = _编.fontMetrics().height()\n"
-            "        窗.设字号(20)\n"
-            "        应用.processEvents()\n"
-            "        _大 = _编.fontMetrics().height()\n"
-            "        报告['字号行高_10pt'] = _小\n"
-            "        报告['字号行高_20pt'] = _大\n"
-            "        报告['字号真的生效'] = bool(_大 > _小)\n"
-            "        报告['行号跟随字号'] = bool(\n"
-            "            _编.行号.fontMetrics().height() == _大)\n"
-            "        窗.设字号(12)\n"
-            "        应用.processEvents()\n"
-            "        报告['恢复后字号'] = 窗.字号\n"
-            "    except Exception as e:\n"
-            "        报告['字号检查失败'] = str(e)\n"
-            "    # 0.0.12 起：帮助与版本控制是运行时 import 的，静态分析扫不到，\n"
-            "    # 打包时若漏了 --hidden-import，这里就会暴露出来（ModuleNotFoundError）。\n"
-            "    for _名, _模块 in (('帮助窗口', None), ('版本控制', None),\n"
-            "                       ('版本控制窗口', None)):\n"
-            "        try:\n"
-            "            __import__(_名)\n"
-            "            报告['模块_' + _名] = True\n"
-            "        except Exception as e:\n"
-            "            报告['模块_' + _名] = '导入失败：%s' % e\n"
-            "    try:\n"
-            "        import 版本控制\n"
-            "        # 用主窗的真实项目目录判断（打包版会自动上移一级，见 _默认项目目录）\n"
-            "        _项目 = 窗.项目目录\n"
-            "        报告['版本控制_探测目录'] = _项目\n"
-            "        报告['版本控制可用'] = bool(版本控制.状态(_项目).get('可用'))\n"
-            "    except Exception as e:\n"
-            "        报告['版本控制可用'] = '检查失败：%s' % e\n"
-            "    try:\n"
-            "        import 帮助窗口\n"
-            "        # 版本历史读的是项目目录里的 版本/，和用户实际点开时一致\n"
-            "        报告['读到归档版本数'] = len(帮助窗口.已归档版本(窗.项目目录))\n"
-            "    except Exception as e:\n"
-            "        报告['读到归档版本数'] = '失败：%s' % e\n"
-            "    try:\n"
-            "        窗.打开说明文档()\n"
-            "        应用.processEvents()\n"
-            "        报告['打开说明文档'] = 窗.标签栏.count() > 1\n"
-            "    except Exception as e:\n"
-            "        报告['打开说明文档'] = '失败：%s' % e\n"
-            "    try:\n"
-            "        _编2 = 窗.当前\n"
-            "        _编2.置文本('核定义 f()：\\n    核说(1)\\n核说(2)\\n')\n"
-            "        _块 = _编2.document().findBlockByNumber(0)\n"
-            "        报告['折叠可用'] = bool(_编2.可折叠(_块))\n"
-            "        if _编2.可折叠(_块):\n"
-            "            _编2.切换折叠(_块)\n"
-            "            应用.processEvents()\n"
-            "            报告['折叠真的生效'] = not _编2.document().findBlockByNumber(1).isVisible()\n"
-            "            _编2.全部展开()\n"
-            "    except Exception as e:\n"
-            "        报告['折叠可用'] = '失败：%s' % e\n"
-            "    try:\n"
-            "        窗.grab().save(os.path.join(输出目录, '自检_Qt.png'))\n"
-            "    except Exception as e:\n"
-            "        报告['截图失败'] = str(e)\n"
-            "    with open(os.path.join(输出目录, '自检报告.json'), 'w', encoding='utf-8') as f:\n"
-            "        json.dump(报告, f, ensure_ascii=False, indent=2)\n"
-            "    print(json.dumps(报告, ensure_ascii=False, indent=2))\n"
-            "    应用.quit()\n"
-            "    return 0\n\n"
-            "if __name__ == '__main__':\n"
-            "    sys.exit(主())\n"
-        )
+    if not os.path.isfile(入口):
+        print("缺少打包入口文件：%s" % 入口)
+        return 1
 
     命令 = [
         找解释器(),

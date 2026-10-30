@@ -28,7 +28,9 @@
     # 编辑器元素
     "行号底": "#1E1F22",
     "行号字": "#9AA0AB",
-    "当前行": "#22252A",
+    # 当前行高亮。原 #22252A 在编辑器底 #1E1F22 上仅 1.18:1，
+    # 和缩进线一样淡、形同虚设（实测）。提到 1.6:1 左右。
+    "当前行": "#26292E",
     "选区": "#2E436E",
     "光标": "#DFE1E5",
     "缩进线": "#2A2C30",
@@ -47,6 +49,10 @@
     "悬停": "#393B40",
     "按下": "#43454A",
     "选中行": "#2E436E",
+    # 选中行的字号：以前 QSS 里写死 #FFFFFF —— 深色底(#2E436E)上没问题，
+    # 浅色底(#D5E5FF)上白字对比度只有 1.1:1，几乎是「看不见」（实测截图）。
+    # 所以按主题分：深色用亮字，浅色用深字。
+    "选中行字": "#DFE1E5",
     "错误": "#FF6B7A",
     "警告": "#D5B778",
     "成功": "#6AAB73",
@@ -88,7 +94,8 @@
     "禁用文本": "#9AA0A8",
     "行号底": "#F7F8FA",
     "行号字": "#676D76",
-    "当前行": "#F2F6FC",
+    # 原 #F2F6FC 在 #FFFFFF 上仅 1.04:1（几乎看不出来）。
+    "当前行": "#EDF2FC",
     "选区": "#CFE2FF",
     "光标": "#1F2329",
     "缩进线": "#E8EBEF",
@@ -104,6 +111,8 @@
     "悬停": "#E6E9ED",
     "按下": "#D8DCE2",
     "选中行": "#D5E5FF",
+    # 浅蓝底配深字：与 #D5E5FF 的对比度约 12:1（白字只有 1.1:1）
+    "选中行字": "#1F2329",
     "错误": "#C7221F",
     "警告": "#8A6D00",
     "成功": "#067D17",
@@ -120,7 +129,10 @@
     # 否则白底上的淡绿淡红基本看不出来。
     "diff增底": "#E6F5EA",
     "diff删底": "#FBE9EC",
-    "diff增字": "#1A7F37",
+    # 原 #1A7F37 压在增行底 #E6F5EA 上正好 4.50:1 —— 卡在 WCAG 正文
+    # 阈值线上，没有余量（不同显示器的 gamma 一偏就读不清）。
+    # 加深一档到 5.48:1。
+    "diff增字": "#17702F",
     "diff删字": "#B4232C",
     "diff头字": "#2F6FD0",
 }
@@ -269,7 +281,7 @@ QTreeWidget {
 }
 QTreeWidget::item { height: 24px; padding-left: 2px; }
 QTreeWidget::item:hover { background: __悬停__; }
-QTreeWidget::item:selected { background: __选中行__; color: #FFFFFF; }
+QTreeWidget::item:selected { background: __选中行__; color: __选中行字__; }
 QTreeWidget::branch { background: transparent; }
 
 /* 标签栏 */
@@ -303,9 +315,12 @@ QPlainTextEdit#console, QTextEdit#console {
     selection-background-color: __选区__;
 }
 
-/* 滚动条 */
+/* 滚动条
+   槽色必须显式给：以前写 transparent，滚动条槽就露出父控件的底色 ——
+   编辑器(#1E1F22)与对照表/控制台面板(#2B2D30)落差明显，深色下
+   编辑器右缘会多出一条浅竖带（实测截图）。现在统一用 __编辑器__。 */
 QScrollBar:vertical {
-    background: transparent; width: 12px; margin: 0px;
+    background: __编辑器__; width: 12px; margin: 0px;
 }
 QScrollBar::handle:vertical {
     background: __悬停__; border-radius: 6px; min-height: 30px; margin: 2px;
@@ -314,7 +329,7 @@ QScrollBar::handle:vertical:hover { background: __按下__; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QScrollBar:horizontal {
-    background: transparent; height: 12px; margin: 0px;
+    background: __编辑器__; height: 12px; margin: 0px;
 }
 QScrollBar::handle:horizontal {
     background: __悬停__; border-radius: 6px; min-width: 30px; margin: 2px;
@@ -423,7 +438,7 @@ QListWidget {
     background: __面板__; color: __文本__; border: none; outline: none;
 }
 QListWidget::item { padding: 9px 14px; border-radius: 6px; }
-QListWidget::item:selected { background: __选中行__; color: #FFFFFF; }
+QListWidget::item:selected { background: __选中行__; color: __选中行字__; }
 QListWidget::item:hover:!selected { background: __悬停__; }
 QGroupBox { color: __文本__; border: none; margin-top: 8px; }
 QLabel { background: transparent; }

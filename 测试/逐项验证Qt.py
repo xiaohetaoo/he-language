@@ -7,7 +7,12 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, r"D:\dsh\dsh5")
+# 仓库根目录 = 本脚本所在目录的上一级。
+# 以前三处硬编码 r"D:" + 分隔符 + "dsh" + 分隔符 + "dsh5"：换台机器（或换个盘）
+# 跑测试时 sys.path 指向不存在的目录 → import 直接失败；更坏的是「样例」
+# 那处 os.path.exists 为假时会**静默跳过**整段运行测试，看着全绿实际没测。
+根目录 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, 根目录)
 sys.argv = ["x"]
 
 from PySide6.QtCore import Qt
@@ -166,7 +171,7 @@ def 主():
         查(False, "复制路径不报错（%s）" % e)
 
     print("[运行与停止]")
-    样例 = os.path.join(r"D:\dsh\dsh5", "例子", "01_你好.xht")
+    样例 = os.path.join(根目录, "例子", "01_你好.xht")
     if os.path.exists(样例):
         w.打开(样例)
         应用.processEvents()
@@ -308,7 +313,7 @@ def 主():
     应用.processEvents()
 
     print("[版本控制：重命名条目的路径]")
-    sys.path.insert(0, r"D:\dsh\dsh5")
+    sys.path.insert(0, 根目录)
     import 版本控制 as 版控
 
     # porcelain v1 的重命名写成 "旧名 -> 新名"。原样存下来的话，
