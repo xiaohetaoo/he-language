@@ -15,9 +15,9 @@ GitHub 的 Release 与附件接口需要 Personal Access Token
     python 测试/发布Release.py --token xxx        应急用；令牌会留在 shell 历史里
 
 行为约定：
-  · exe 不存在就直接失败 —— 发布一个没有 exe 的 Release 没有意义
-  · Release 若已存在，不重复创建，只补齐缺失的附件
-  · 附件传完后再查一次，确认真在页面上
+  - exe 不存在就直接失败 —— 发布一个没有 exe 的 Release 没有意义
+  - Release 若已存在，不重复创建，只补齐缺失的附件
+  - 附件传完后再查一次，确认真在页面上
 """
 
 import json
@@ -302,14 +302,14 @@ def 上传附件(发布, 令牌, 路径, 名=None):
         类型 = "application/zip"
 
     大小兆 = os.path.getsize(路径) / 1024.0 / 1024.0
-    print("  正在上传 %s（%.1f MB）…" % (名, 大小兆), flush=True)
+    print("  正在上传 %s（%.1f MB）..." % (名, 大小兆), flush=True)
     # 用文件对象而不是 bytes：107MB 一次性读进内存再发，在慢链路上
     # 必然超时（实测 900 秒没传完），而且看不到进度。
     with open(路径, "rb") as f:
         码, 结果 = 请求("POST", 上传地址, 令牌, 原始=f, 类型=类型,
                         超时=1800, 进度=True)
     if 码 in (200, 201):
-        return True, "已上传 %s（%.1f MB）→ %s" % (
+        return True, "已上传 %s（%.1f MB）-> %s" % (
             名, 大小兆, 结果.get("browser_download_url", "")
         )
     return False, "上传 %s 失败（%s）：%s" % (名, 码, 结果)
@@ -344,14 +344,14 @@ def 主():
     参数 = sys.argv[1:]
     令牌 = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if "--token" in 参数:
-        # ⚠️ 命令行里带令牌会留在 shell 历史里：
+        # [!]️ 命令行里带令牌会留在 shell 历史里：
         # PowerShell 的 Get-History、PSReadLine 的 PersistentHistory
         # 都会把整行存下来，令牌等于明文落盘。以前这里直接接受它，
         # 而且文档示例就是这么教的。仍然支持（应急时确实方便），
         # 但明确提示并推荐另外两条路。
         _idx = 参数.index("--token")
         令牌 = 参数[_idx + 1] if _idx + 1 < len(参数) else ""
-        print("⚠ 令牌来自命令行参数，它会被记进 shell 历史（PowerShell 的 "
+        print("[!] 令牌来自命令行参数，它会被记进 shell 历史（PowerShell 的 "
               "Get-History 与 PSReadLine 历史文件都会存）。")
         print("  下次建议改用：  set GH_TOKEN=...   或   --凭据")
         print("  用完请到 GitHub 撤销这个令牌并重新生成。")
@@ -366,7 +366,7 @@ def 主():
         print("生成步骤：")
         print("  1. 打开 https://github.com/settings/tokens?type=beta")
         print("  2. 新建 Fine-grained token，Repository access 选 he-language")
-        print("  3. Permissions → Repository permissions → Contents: Read and write")
+        print("  3. Permissions -> Repository permissions -> Contents: Read and write")
         print("  4. 生成后执行：  set GH_TOKEN=github_pat_xxx")
         print("                   python 测试/发布Release.py")
         return 2
@@ -390,7 +390,7 @@ def 主():
     附件清单.append((exe, 发布名))
     if "--源码包" in 参数:
         zip路径 = os.path.join(根目录, "dist", "he-language-%s-src.zip" % 版本号)
-        print("正在打源码包…")
+        print("正在打源码包...")
         打源码包(zip路径)
         附件清单.append((zip路径, os.path.basename(zip路径)))
 
@@ -398,7 +398,7 @@ def 主():
     print("标签：%s" % 标签)
     print("附件：")
     for 本地, 名 in 附件清单:
-        print("  %s → %s（%.1f MB）"
+        print("  %s -> %s（%.1f MB）"
               % (os.path.basename(本地), 名,
                  os.path.getsize(本地) / 1024.0 / 1024.0))
     print()
@@ -435,7 +435,12 @@ def 主():
     全部成功 = True
     for 本地, 名 in 附件清单:
         成功, 说明 = 上传附件(发布, 令牌, 本地, 名)
-        print(("  ✓ " if 成功 else "  × ") + 说明)
+        # 只用 ASCII 记号。以前这里是「[OK] / ×」两个非 ASCII 字符 ——
+        # Windows 控制台默认 GBK，[OK]（U+2713）根本编不进去，一打印就
+        # UnicodeEncodeError 直接崩。0.1.7 发布时真的踩了：附件已经
+        # 传到 90%+ 并且上传成功，脚本却在打印这一行时崩掉 ——
+        # 后面的「复核附件是否真在页面上」那步被跳过，看着像失败了。
+        print(("  [OK]   " if 成功 else "  [失败] ") + 说明)
         全部成功 = 全部成功 and 成功
 
     # 上传后再查一次，确认真在页面上
