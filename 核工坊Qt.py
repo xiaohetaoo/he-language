@@ -644,16 +644,29 @@ class 主窗(QMainWindow):
         存盘失败也继续走，不能因为一个文件写不进去就卡住关机。
         """
         self._正在退出 = True
-        for 编 in list(self.文档集):
-            if not _还活着(编) or not 编.已改:
-                continue
-            if not 编.文件路径:
-                continue      # 未命名，没地方写
-            try:
-                self.保存(编, 弹窗=False)
-            except Exception:  # noqa: BLE001
-                continue
-        self._收尾退出()
+        try:
+            for 编 in list(self.文档集):
+                if not _还活着(编) or not 编.已改:
+                    continue
+                if not 编.文件路径:
+                    continue      # 未命名，没地方写
+                try:
+                    self.保存(编, 弹窗=False)
+                except Exception:  # noqa: BLE001
+                    continue
+            self._收尾退出()
+        finally:
+            # 必须复位。
+            #
+            # `_正在退出` 的作用是「已经问过一轮了，closeEvent 直接放行」——
+            # 它只在真正关窗那一瞬间成立。而 commitDataRequest 发出来时
+            # 桌面**还可能取消关机**（Windows 会问用户「还有程序没关，要强制
+            # 关机吗」）。一旦用户选了取消，程序继续用，但这个标志留着 True：
+            # 之后再编辑、再关窗时 closeEvent 看到它就直接 accept，
+            # **关机存盘之后的新改动被静默丢弃**（实测：关机后残留 True，
+            # 再关窗弹框次数 0）。
+            # 所以存完盘就把标志放下来，让窗口回到「正常可关闭」状态。
+            self._正在退出 = False
 
     def _标记退出中(self):
         self._收到退出信号 = True
@@ -1077,6 +1090,21 @@ class 主窗(QMainWindow):
             self.容器.layout().addWidget(编)
         编.show()
         self.当前 = 编
+        # 标签栏的选中态必须跟着一起挪。
+        #
+        # 这里是**唯一**该同步的地方：以前只有 新建() 自己补了一句
+        # setCurrentIndex，而 打开() / 快速打开 / 双击项目树 / 拖放
+        # 都只调本函数 —— 于是打开新文件后标签高亮停在旧标签、
+        # 内容区已经是新文件（实测三连：打开甲、打开乙都停在「未命名」）。
+        # 这个 bug 一直是历史欠账，因为 QTabBar 非空时 addTab 不会自动选中，
+        # 而视觉上「内容对了」很容易让人忽略标签没跟上。
+        if 编 in self.文档集:
+            索引 = self.文档集.index(编)
+            if self.标签栏.currentIndex() != 索引:
+                # 直接 setCurrentIndex 会触发 currentChanged → _切标签，
+                # 但那边只是再调一次 _显示文档，同一对象，幂等，不会再递归下去
+                # （因为此时 当前 is 编，上面的 hide/显示都跳过）。
+                self.标签栏.setCurrentIndex(索引)
         self._刷新标题()
         self.更新状态栏()
         编.setFocus()

@@ -39,11 +39,39 @@ def 确保图标(根目录):
     return 结果.returncode == 0
 
 
+def 清理残留进程(名="核工坊"):
+    """打包前先杀掉还在跑的旧 exe。
+
+    PyInstaller 要覆盖 dist 里那个 exe，若上一次打出来的程序还开着
+    （或者运行用户程序时留下的孤儿进程还活着），文件就被锁住，
+    构建会在替换那一步失败，报一句很难懂的 Permission denied。
+    与其让用户去猜，不如打包前主动清掉。只杀同名进程。
+
+    Qt 版（测试/打包Qt.py）早就有这一手，tkinter 版一直没跟上 ——
+    两个打包脚本产出不同 exe，缺了这个清理，tkinter 版踩坑时更难查。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        r = subprocess.run(
+            ["taskkill", "/F", "/IM", 名 + ".exe"],
+            capture_output=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    # 返回码 128（找不到进程）是正常情况：本来就没在跑。
+    if r.returncode == 0:
+        print("已结束残留的 %s.exe" % 名)
+
+
 def 主():
     参数 = sys.argv[1:]
     单文件 = "--目录" not in 参数
     控制台 = "--控制台" in 参数
     确保图标(根目录)
+    # 先清掉还在跑的旧 exe：它锁着 dist 里的文件，覆盖会失败。
+    清理残留进程()
 
     命令 = [
         找解释器(),
