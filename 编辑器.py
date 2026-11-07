@@ -150,6 +150,7 @@ class 高亮器(QSyntaxHighlighter):
             `核异常 值错误 核作为 错误：`  -> [值错误]（核作为之后是变量名）
             `核异常 (值错误, 类型错误)：`  -> [值错误, 类型错误]
             `核抛出 权限错误()`            -> [权限错误]
+            `核异常 值错误, 类型错误：`    -> [值错误, 类型错误]（无括号并列也染）
         """
         区间 = []
         括号里 = False
@@ -162,14 +163,21 @@ class 高亮器(QSyntaxHighlighter):
             c = 文本[i]
             if c in " \t":
                 i += 1
-            elif c == "(":
+            # 括号用 规范化单字 归一后判断，半角 `(` 与全角 `（` 都认 ——
+            # 与 _括号方向 同一套口径。以前只认 ASCII，于是合法代码
+            # `核异常（值错误）：` 染不上异常名色，而全角逗号却已认，
+            # 半全角口径不对称。
+            elif 核.规范化单字(c) == "(":
                 括号里 = True
                 i += 1
             elif c in ",，":
+                # 逗号后面还有名字：有括号时是并列，无括号时也是并列
+                # （`核异常 A, B：` 翻译器会自动补括号，高亮跟着染，两边口径一致）
                 i += 1
-            elif c == ")" and 括号里:
+            elif 核.规范化单字(c) == ")":
                 括号里 = False
                 i += 1
+                break
             elif c == "_" or c.isalnum() or c.isidentifier():
                 j = i
                 while j < len(文本) and (
@@ -179,8 +187,9 @@ class 高亮器(QSyntaxHighlighter):
                 if not (在串里(i) or 在注释里(i)):
                     区间.append((i, j))
                 i = j
-                # 不在括号里就只认第一个名字
-                if not 括号里:
+                # 后面不是逗号就收工（是逗号说明还有并列的名字）
+                后面 = 文本[i:停].lstrip(" \t")
+                if not (后面.startswith(",") or 后面.startswith("，")):
                     break
             else:
                 break

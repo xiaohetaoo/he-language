@@ -350,6 +350,62 @@ def 测漏导入线索():
         "写了导入就正常跑通（实际：%r）" % (出 or "").strip()[:80],
     )
 
+def 测并列异常():
+    """无括号并列异常要自动补括号，否则产物是非法 Python。
+
+    `核异常 值错误, 类型错误：` 照字面翻译会得到 `except ValueError, TypeError:`——
+    那是 Python 2 的写法，Python 3 直接 invalid syntax；而 _语法线索 只会落到
+    「看看是不是拼错」的兜底上，指错方向。
+    """
+    print()
+    print("[并列异常]")
+
+    for 源码, 期望, 说明 in (
+        (
+            "核异常 值错误, 类型错误：\n    核略过\n",
+            "except (ValueError, TypeError):",
+            "无括号并列自动补括号",
+        ),
+        (
+            "核异常 值错误, 类型错误 核作为 错：\n    核略过\n",
+            "except (ValueError, TypeError) as 错:",
+            "核作为 留在括号外",
+        ),
+        (
+            "核异常 (值错误, 类型错误)：\n    核略过\n",
+            "except (ValueError, TypeError):",
+            "已经写过括号的不重复补",
+        ),
+        ("核异常 值错误：\n    核略过\n", "except ValueError:", "单个类型不加括号"),
+        (
+            '核抛出 权限错误("x")\n',
+            'raise PermissionError("x")',
+            "核抛出 的调用括号不会被误判成并列",
+        ),
+    ):
+        译 = 核.转译(源码)
+        首行 = 译.splitlines()[0] if 译 else ""
+        检查(期望 in 译, "%s（实际：%r）" % (说明, 首行))
+
+    # 真跑一遍：补出来的括号要真能接住
+    出 = 跑(
+        "核试：\n"
+        '    核抛出 值错误("x")\n'
+        "核异常 值错误, 类型错误：\n"
+        '    核说("接住了")\n'
+    )
+    检查(
+        出 is not None and "接住了" in 出,
+        "补出括号后真能接住 ValueError（实际：%r）" % (出 or "").strip()[:90],
+    )
+
+    # _语法线索 要有专门规则，不再落进 invalid syntax 兜底
+    线索 = 核._语法线索("multiple exception types must be parenthesized")
+    检查(
+        "核异常 (值错误, 类型错误)：" in 线索,
+        "_语法线索 命中并列异常规则（实际：%r）" % 线索[:60],
+    )
+
 def 测无冲突():
     print()
     print("[重名冲突]")
@@ -384,6 +440,7 @@ def 主():
     测转译()
     测赋值不覆盖()
     测漏导入线索()
+    测并列异常()
     测成员存在()
     测真实运行()
     测无冲突()
