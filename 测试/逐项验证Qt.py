@@ -93,7 +93,27 @@ def 主():
     if 剪贴板可用:
         e.paste()
         应用.processEvents()
-        查("测试" in e.取文本(), "粘贴恢复")
+        if "测试" in e.取文本():
+            查(True, "粘贴恢复")
+        else:
+            # 探针到这里之间剪贴板可能被别的程序抢走 —— Windows 上实测偶发：
+            #   OleSetClipboard: Failed ... COM error 0x800401d0:
+            #   OpenClipboard 失败（被占用）
+            # 那种情况下上面的 cut 已经把内容清空、paste 自然补不回来，
+            # 不是编辑器的问题。重新探一次再定性：还能用才算真失败。
+            还能用 = False
+            try:
+                应用.clipboard().setText("剪贴板探针_核工坊")
+                应用.processEvents()
+                还能用 = 应用.clipboard().text() == "剪贴板探针_核工坊"
+            except Exception:  # noqa: BLE001
+                还能用 = False
+            if 还能用:
+                查(False, "粘贴恢复")
+            else:
+                print("  --  跳过「粘贴恢复」：剪贴板中途被别的程序占用，")
+                print("      不是产品缺陷。")
+                e.置文本("测试 内容")
     else:
         # 剪贴板不可用时 cut 已经把内容清空了，paste 补不回来 ——
         # 这不是编辑器的错，所以不判失败。但要把内容还原，
