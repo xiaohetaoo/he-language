@@ -1607,12 +1607,25 @@ class 主窗(QMainWindow):
                     队列.put(块.decode("utf-8", "replace"))
                     空读 = 0
                     continue
-                空读 += 1
                 已结束 = 进程.poll() is not None
-                if 已结束 and 空读 >= 3:
-                    break
                 if not 已结束:
+                    # 进程还活着时读到空是**正常**的（它还没打印）。
+                    # 这种空读绝不能计入 空读 —— 以前不分状态一律累加，
+                    # 于是子进程启动慢一点（机器负载高时半秒以上）就攒出
+                    # 几十次空读；等它刚退出、最后一包还在管道里没被取走
+                    # 的那一瞬间，read1 仍可能返回空，"已结束 and 空读 >= 3"
+                    # 当场成立直接 break，那包输出就永远丢了。
+                    # 实测表现：控制台里有「[程序结束，返回 0]」，
+                    # 却看不到程序自己打印的内容。
+                    空读 = 0
                     time.sleep(0.03)
+                    continue
+                # 进程结束后才计「连续空读」，并且每次之间让出 CPU，
+                # 给系统留出把管道尾包交付过来的时间。
+                空读 += 1
+                if 空读 >= 5:
+                    break
+                time.sleep(0.01)
         finally:
             pass
 
@@ -1623,6 +1636,10 @@ class 主窗(QMainWindow):
             读 = getattr(self, "_读线程", None)
             if 读 is not None and 读.is_alive():
                 读.join(timeout=1.0)
+            # 读线程万一没能在 1 秒内排空（负载高、输出量大），这里再主动
+            # 捞一次管道 —— _收尾 会把流关掉，关掉之后残留就再也拿不到了。
+            # 实测过「有结束码、没有程序输出」的回归，漏的就是这一手。
+            self._再捞管道()
             self._吸输出()
             self._收尾()
             self._写控制台("\n[程序结束，返回 %d]\n" % 码)
@@ -1633,6 +1650,26 @@ class 主窗(QMainWindow):
             if self._轮询:
                 self._轮询.stop()
                 self._轮询 = None
+
+    def _再捞管道(self):
+        """把 stdout 里剩下的字节直接塞进当前队列，不依赖读线程。
+
+        只在进程已结束、准备收尾之前调用 —— 此时已无并发写入，
+        读到的是读线程剩下的尾巴。
+        """
+        队列 = getattr(self, "_输出", None)
+        进程 = self.进程
+        if 队列 is None or 进程 is None:
+            return
+        流 = getattr(进程, "stdout", None)
+        if 流 is None:
+            return
+        try:
+            剩余 = 流.read()
+        except (OSError, ValueError):
+            return
+        if 剩余:
+            队列.put(剩余.decode("utf-8", "replace"))
 
     @staticmethod
     def _杀进程树(进程):
