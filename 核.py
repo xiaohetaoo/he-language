@@ -24,7 +24,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.2.2"
+版本 = "0.2.3"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -363,11 +363,28 @@ read readline readlines write writelines close seek tell flush
 #:
 #: 写 `核导入 核数学库` 会变成 `import math`；`核从 核随机库 核导入 …`
 #: 会变成 `from random import …`。省掉「核」的简写也认。
+#:
+#: 值可以是带点的子模块（`os.path`）—— `import os.path` 是合法语句，
+#: `os.path.join` 也是合法引用。但**中文名必须是合法标识符**：
+#: 不能含空格或 ASCII 以外的标点，否则转译器的扫描器根本切不出这个名字。
+#: 所以是「核JSON库」而不是「核 JSON 库」。
 模块表 = {
     "核数学库": "math",
     "核随机库": "random",
+    "核时间库": "time",
+    "核路径库": "os.path",
+    "核系统库": "os",
+    "核命令行库": "sys",
+    "核JSON库": "json",
+    "核网络库": "urllib.request",
     "数学库": "math",
     "随机库": "random",
+    "时间库": "time",
+    "路径库": "os.path",
+    "系统库": "os",
+    "命令行库": "sys",
+    "JSON库": "json",
+    "网络库": "urllib.request",
 }
 
 #: —— 标准库：成员名（函数与常数）——
@@ -463,6 +480,44 @@ read readline readlines write writelines close seek tell flush
     "核随机种子": "seed",
     "核取随机态": "getstate",
     "核设随机态": "setstate",
+    # ===================== 核时间库 =====================
+    # —— 时间与日期 ——
+    "核当前秒": "time",
+    "核纳秒": "time_ns",
+    "核格式化时间": "strftime",
+    "核解析时间": "strptime",
+    "核本地时间": "localtime",
+    "核时间文本": "ctime",
+    # —— 休眠与延迟 ——
+    "核睡眠": "sleep",
+    # ===================== 核路径库（os.path）=====================
+    # —— 路径拼接与检查 ——
+    "核拼接路径": "join",
+    "核绝对路径": "abspath",
+    "核路径存在": "exists",
+    "核是文件": "isfile",
+    "核是目录": "isdir",
+    "核目录名": "dirname",
+    "核文件名": "basename",
+    "核扩展名": "splitext",
+    # ===================== 核系统库（os / sys）=====================
+    "核工作目录": "getcwd",
+    "核列表目录": "listdir",
+    "核建目录": "makedirs",
+    "核删文件": "remove",
+    "核改文件名": "rename",
+    # ===================== 核命令行库（sys）=====================
+    "核取参数": "argv",
+    "核Python版": "version_info",
+    # ===================== 核JSON库 =====================
+    # —— 序列化 / 反序列化 ——
+    "核序列化": "dumps",
+    "核反序列化": "loads",
+    "核读JSON": "load",
+    "核写JSON": "dump",
+    # ===================== 核网络库（弱）=====================
+    # —— 只读拉取 URL ——
+    "核拉取URL": "urlopen",
 }
 
 #: 英文成员名 -> (模块中文名, 成员中文名)。
@@ -474,10 +529,13 @@ read readline readlines write writelines close seek tell flush
 #: 归属靠 hasattr 现问标准库，**不手写第二份映射** —— 以后往 库成员表
 #: 里加成员，这里自动跟上，不会出现两张表对不上的情况。
 def _建库成员反查():
-    import math
-    import random
+    import importlib
 
-    模块实例 = {"math": math, "random": random}
+    模块实例 = {}
+    for 模块英 in 模块表.values():
+        if 模块英 in 模块实例:
+            continue
+        模块实例[模块英] = importlib.import_module(模块英)
     归属 = {}
     for 模块中, 模块英 in 模块表.items():
         # 只认带「核」的全称，省写（数学库 / 随机库）不重复记一遍

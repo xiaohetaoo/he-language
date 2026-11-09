@@ -193,9 +193,17 @@ def 测赋值不覆盖():
 def 测成员存在():
     print()
     print("[成员真实性]")
+    # 模块实例由 核.模块表 推导，不手写清单 —— 0.2.3 加了 time/os/sys/json
+    # 之后，写死 math/random 会让这条检查变成「只测两个老模块」。
+    import importlib
+
+    实例 = {}
+    for 英 in sorted(set(核.模块表.values())):
+        实例[英] = importlib.import_module(英)
+
     缺 = []
     for 中, 英 in sorted(核.库成员表.items()):
-        if not (hasattr(math, 英) or hasattr(random, 英)):
+        if not any(hasattr(m, 英) for m in 实例.values()):
             缺.append("%s -> %s" % (中, 英))
     检查(
         not 缺,

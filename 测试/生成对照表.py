@@ -18,8 +18,17 @@ import sys
 sys.path.insert(0, 根目录)
 
 import 核  # noqa: E402
-import math as _数学  # noqa: E402
-import random as _随机  # noqa: E402
+import importlib  # noqa: E402
+
+#: 模块英文名 -> 模块对象。由 核.模块表 推导，不手写清单 ——
+#: 以后内核再加标准库，对照表自动跟上，不会漏掉新模块的成员归属。
+_模块实例 = {}
+for _中, _英 in 核.模块表.items():
+    if not _中.startswith("核"):
+        continue
+    if _英 not in _模块实例:
+        _模块实例[_英] = importlib.import_module(_英)
+del _中, _英
 
 输出 = os.path.join(根目录, "对照表.md")
 
@@ -68,11 +77,17 @@ for _中, _英 in 核.关键词表.items():
 
 
 def _属哪个库(英):
-    """这个成员名属于哪个标准库。math 与 random 成员不重名，先问 math。"""
-    if hasattr(_数学, 英):
-        return "核数学库"
-    if hasattr(_随机, 英):
-        return "核随机库"
+    """这个成员名属于哪个标准库（返回**中文模块名**）。
+
+    从 模块表 推导，不手写模块清单 —— 以后再加标准库，这里自动跟上。
+    模块之间成员不重名，所以命中顺序不影响结果。
+    """
+    for 英模块, 模 in _模块实例.items():
+        if hasattr(模, 英):
+            for 中, 英2 in 核.模块表.items():
+                if 英2 == 英模块 and 中.startswith("核"):
+                    return 中
+            return 英模块
     return "未知"
 
 
@@ -215,8 +230,9 @@ def 生成():
     # —— 六、标准库 ——
     添加("## 六、标准库")
     添加("")
-    添加("标准库就是 Python 自带的 `math` 与 `random`。核语言给它们各起了一个"
-         "中文模块名，成员名也照「核」+ 中文的规律办。")
+    添加("标准库就是 Python 自带的模块：`math` `random` `time` `os` `os.path`"
+         " `sys` `json` `urllib.request`。核语言给每个模块起了中文名，"
+         "成员名也照「核」+ 中文的规律办。")
     添加("")
     添加("| 核语言 | Python | 备注 |")
     添加("| --- | --- | --- |")
