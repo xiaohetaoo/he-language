@@ -339,17 +339,6 @@ class 设置窗口(tk.Toplevel):
         self.主题 = self.主窗.主题
         self._重建()
 
-    def _改字号(self, 值):
-        try:
-            n = int(float(值))
-        except (TypeError, ValueError):
-            return
-        if n == self.值["字号"]:
-            return
-        self.值["字号"] = n
-        self.字号标.configure(text="%d pt" % n)
-        self.主窗.改字号(n - self.主窗.字号, 存配置=False)
-
     def _页编辑器(self):
         主题 = self.主题
         self._变量 = {}
@@ -396,12 +385,6 @@ class 设置窗口(tk.Toplevel):
         self._分组("行为")
         self._勾选("输入时自动语法高亮", "自动高亮")
         self._勾选("运行前清空输出窗口", "运行后清空")
-
-    def _改制表宽(self, 值):
-        try:
-            self.值["制表宽"] = int(值)
-        except (TypeError, ValueError):
-            pass
 
     def _页运行(self):
         主题 = self.主题

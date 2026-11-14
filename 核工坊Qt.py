@@ -2542,29 +2542,6 @@ class 主窗(QMainWindow):
                 查询器.停()
         self.存配置()
 
-    def _逐个处理未保存(self):
-        """有未保存的文档就逐个问要不要保存（模态版）。
-
-        ⚠️ **只能在「用户主动操作」的上下文里调，绝不能在退出流程里调**。
-        程序自己 quit() 时会同步走到 closeEvent，那时弹模态框会把
-        事件循环卡死（实测）。退出路径统一用非模态的 _问要不要保存()。
-
-        现在仍有调用的是「关闭全部」这类菜单动作 —— 那些不涉及退出流程。
-        返回 True = 可以继续；False = 用户选了「取消」，不该继续。
-        """
-        for 编 in list(self.文档集):
-            if not 编.已改:
-                continue
-            答 = QMessageBox.question(
-                self, "保存确认", "「%s」已修改，要保存吗？" % self._文件名(编),
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            )
-            if 答 == QMessageBox.Cancel:
-                return False
-            if 答 == QMessageBox.Yes and not self.保存(编):
-                return False
-        return True
-
     def closeEvent(self, 事件):
         """关窗口（Alt+F4、任务栏右键关闭、系统关机）也要先问要不要保存。
 

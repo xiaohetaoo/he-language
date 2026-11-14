@@ -180,30 +180,3 @@ def 圆角矩形(画布, x1, y1, x2, y2, 半径, **选项):
         x1, y1,
     ]
     return 画布.create_polygon(点, smooth=True, splinesteps=12, **选项)
-
-
-def 圆角图(路径, 边长, 半径, 背景色="#000000"):
-    """把图标按圆角裁切并缩放，返回 PIL Image；没有 Pillow 时返回 None。"""
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:
-        return None
-    try:
-        from PIL import Image as _I
-
-        图 = _I.open(路径).convert("RGBA")
-    except Exception:
-        return None
-    半径 = max(0, min(int(半径), 边长 // 2))
-    图.thumbnail((边长, 边长), _I.LANCZOS)
-    画布 = _I.new("RGBA", (边长, 边长), (0, 0, 0, 0))
-    画布.paste(图, ((边长 - 图.width) // 2, (边长 - 图.height) // 2), 图)
-    if 半径 <= 0:
-        return 画布
-    遮罩 = _I.new("L", (边长, 边长), 0)
-    ImageDraw.Draw(遮罩).rounded_rectangle(
-        (0, 0, 边长 - 1, 边长 - 1), radius=半径, fill=255
-    )
-    结果 = _I.new("RGBA", (边长, 边长), (0, 0, 0, 0))
-    结果.paste(画布, (0, 0), 遮罩)
-    return 结果
