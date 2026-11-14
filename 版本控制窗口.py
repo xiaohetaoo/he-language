@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
+import 主题
 import 版本控制
 
 
@@ -28,17 +29,33 @@ def 等宽字体():
     先问 QFontDatabase 要一个可用的族名，都没有就退回 QFont 的等宽风格 ——
     不能凭名字猜：名字不存在时 Qt 会静默替换成默认字体，
     等宽对齐就悄悄失效了（看不出报错，只是看着歪）。
+
+    **候选表统一从 主题 取**（0.2.7 修）：以前这里自己抄了一份，
+    比 主题.等宽候选 少了 JetBrains Mono、多了 DejaVu Sans Mono。
+    于是同一台机器上编辑器用 Cascadia、diff 用 DejaVu —— 两边行高不一致，
+    diff 里 `+`/`-` 行与上下文的间距也对不齐，看着就是「没对齐」。
+    现在两者共用一份：编辑器挑到哪个，diff 就用哪个。
+    字号也跟编辑器走（主窗字号），不再写死 10。
     """
+    import 主题
+
     from PySide6.QtGui import QFontDatabase
 
-    候选 = ("Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New")
+    候选 = 主题.等宽候选
+    已装 = set(QFontDatabase.families())
     for 名 in 候选:
-        if 名 in QFontDatabase.families():
-            return QFont(名, 10)
-    字体 = QFont()
+        if 名 in 已装:
+            return 名
+    return 候选[-1]
+
+
+def 等宽字体对象(主窗=None):
+    """等宽 QFont（带字号），给 diff 预览用。"""
+    from PySide6.QtGui import QFont
+
+    字号 = int(getattr(主窗, "字号", 12)) if 主窗 is not None else 12
+    字体 = QFont(等宽字体(), 字号)
     字体.setStyleHint(QFont.Monospace)
-    字体.setFamilies(list(候选))
-    字体.setPointSize(10)
     return 字体
 
 
@@ -55,12 +72,15 @@ class 版本控制窗口(QDialog):
         # 主窗换主题时由 核工坊Qt.主窗._同步对话框样式 重新套一遍
         self.跟主题 = True
         self._建界面()
-        self.刷新()
+        # 第一次读同步做：面板一建出来就该是填好的状态。
+        # 之后用户点「刷新」按钮才走后台线程（见 刷新 的说明）。
+        self._建成 = True
+        self.刷新(同步=True)
 
     def _建界面(self):
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(18, 16, 18, 14)
-        布局.setSpacing(8)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
+        布局.setSpacing(主题.间距)
 
         标 = QLabel("版本控制")
         标.setObjectName("pageTitle")
@@ -90,7 +110,7 @@ class 版本控制窗口(QDialog):
         self.差异.setObjectName("diffView")
         self.差异.setReadOnly(True)
         self.差异.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.差异.setFont(等宽字体())
+        self.差异.setFont(等宽字体对象(self.主窗))
         self.差异.setPlaceholderText("选中上面的文件，这里显示它的差异")
 
         分栏 = QSplitter(Qt.Vertical)
@@ -126,11 +146,59 @@ class 版本控制窗口(QDialog):
 
     # —— 刷新 ——
 
-    def 刷新(self):
-        self.树.clear()
-        状态 = 版本控制.状态(self.目录)
-        self.状态 = 状态
+    def 刷新(self, 同步=None):
+        """重新读一次仓库状态。
 
+        **点「刷新」按钮走后台线程**（0.2.7 修）。以前这里直接同步调
+        版本控制.状态()，会串行跑 4 个 git 子进程（每个超时 6 秒）。
+        主窗顶部那个按钮早就改成后台查了（见 版本查询器），
+        但面板自己的「刷新」漏了 —— 大仓库、网络盘、或杀毒软件
+        逐个文件扫描时，点一下刷新整个界面就白屏几秒。
+        这里复用主窗的 版本查询器（同一时刻只允许一个查询在飞，
+        连点不会堆出并发子进程）。
+
+        `同步` 参数：构造时（`__init__` 里那次）要**同步**读 ——
+        面板刚建出来就必须是填好的状态，否则打开面板先看到一瞬间空白，
+        而且调用方（测试、以及任何「建完立刻读」的代码）拿到的是空表。
+        用户点「刷新」按钮时才走异步。
+        """
+        if 同步 is None:
+            同步 = not getattr(self, "_建成", False)
+        self.树.clear()
+        self.概要.setText("正在读取版本控制状态…")
+        self.空提示.setText("")
+        差异 = getattr(self, "_差异", None)
+        if 差异 is not None:
+            差异.clear()
+        查询器 = getattr(self.主窗, "_版本查询", None)
+        if 同步 or 查询器 is None:
+            # 没有查询器（单测里直接 new 面板、或面板先于主窗就绪）也走同步：
+            # 功能不能缺，只是这一次会卡一下。
+            self._状态回来了(版本控制.状态(self.目录), self.目录)
+            return
+        # 只连接一次：面板存活期间会反复点「刷新」，
+        # 每点一次都 connect 会让回调被调 N 次（Qt 不会自动去重，
+        # UniqueConnection 要求带 Qt.ConnectionType 组合，写起来反而易错）。
+        if not getattr(self, "_已接信号", False):
+            try:
+                查询器.好了.connect(self._状态回来了)
+                self._已接信号 = True
+            except (RuntimeError, TypeError):
+                self._已接信号 = False
+        查询器.查(self.目录)
+
+    def _状态回来了(self, 状态, 目录):
+        """后台查询结果回来了（主线程执行）。"""
+        if 目录 != self.目录:
+            return  # 期间换了目录，这次结果过期
+        try:
+            self._填状态(状态)
+        except RuntimeError:
+            pass  # 面板已经关掉了
+
+    def _填状态(self, 状态):
+        self.状态 = 状态
+        self.树.clear()
         if not 状态["可用"]:
             原因 = 状态.get("原因") or "不可用"
             self.概要.setText("未启用：%s" % 原因)
@@ -224,8 +292,17 @@ class 版本控制窗口(QDialog):
         为什么必须重染：diff 的增/删底色是 逐行 QTextCharFormat ，
         不是 QSS —— 换主题时 QSS 会自动跟着换，但已经写进字符格式的
         颜色不会，于是浅色主题下 diff 还是深色主题的淡绿淡红。
+
+        顺带把等宽字体按主窗的**当前字号**重设一次（0.2.7 补）：
+        字体是在构造时按当时的字号建的，之后用户改了字号，
+        主窗只遍历 文档集 调 设置字体，从不会碰到这个面板 ——
+        于是编辑器字号变了、diff 还是老字号，两块的字距对不上。
         """
         self.setStyleSheet(self.主窗.styleSheet())
+        try:
+            self.差异.setFont(等宽字体对象(self.主窗))
+        except (AttributeError, RuntimeError):
+            pass
         self._上色()
 
     def _上色(self):

@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
 )
 
+import 主题
+
 这里 = os.path.dirname(os.path.abspath(__file__))
 版本根 = os.path.join(这里, "版本")
 
@@ -110,8 +112,8 @@ class 版本历史对话框(QDialog):
 
     def _建界面(self):
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(20, 18, 20, 16)
-        布局.setSpacing(10)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
+        布局.setSpacing(主题.间距)
 
         标 = QLabel("核语言 版本历史")
         标.setObjectName("pageTitle")
@@ -221,8 +223,9 @@ class 关于对话框(QDialog):
 
     def _建界面(self):
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(24, 22, 24, 18)
-        布局.setSpacing(8)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
+        布局.setSpacing(主题.间距)
+
 
         标 = QLabel("核工坊")
         标.setObjectName("aboutTitle")

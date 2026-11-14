@@ -152,7 +152,11 @@
 
 主题集 = {"深色": 深色, "浅色": 浅色}
 
-#: 等宽字体候选（按优先级）
+#: 等宽字体候选（按优先级）—— **唯一来源**。
+#: 编辑器、版本控制面板的 diff 预览、自检都必须读这里。
+#: 以前 版本控制窗口.py 自己写了一份，且多塞了 DejaVu Sans Mono、少了
+#: JetBrains Mono：同一台机器上「编辑器用 Cascadia、diff 用 DejaVu」，
+#: 两个面板的行高对不齐，看起来像 diff 没对齐。
 等宽候选 = ("Cascadia Mono", "JetBrains Mono", "Consolas", "Courier New")
 #: 界面字体
 界面字体 = "Microsoft YaHei UI"
@@ -164,6 +168,41 @@
 字号最小 = 8
 字号最大 = 40
 字号步长 = 1
+
+# ---------------------------------------------------------------------------
+# 布局尺寸 —— **统一口径**
+# ---------------------------------------------------------------------------
+# 以前这些数字散落在各处的 setContentsMargins / setFixedHeight 里，
+# 一共 7 种内边距、6 种间距、5 种固定高度。后果不是报错，而是**看起来不齐**：
+# 项目树头的文字从 x=10 起、运行窗头的标题从 x=14 起、状态栏又从 x=14 起，
+# 三个面板的左边线对不齐，眼睛会明显觉得「左边缘是歪的」。
+#
+# 现在按「一套 4 的倍数」收敛：
+#   边距 4 / 8 / 12 / 16，间距 4 / 6 / 8，高度 26 / 30 / 32 / 44
+# 下面的常量是各处应当引用的**唯一来源**，不要再写字面量。
+
+#: 面板/行内容的标准左右内边距（顶行、面板头、状态栏、运行窗头都用它）
+内边距 = 12
+#: 竖向紧凑内边距（面板头的上下、输入行上下）
+内边距_竖 = 4
+#: 控件之间的标准间距
+间距 = 8
+#: 图标/文字紧邻时的紧凑间距
+间距_紧 = 4
+#: 分栏面板之间的间距（标题与内容之间那种「一段留白」）
+间距_段 = 12
+
+#: 顶行高度（无边框窗口的自绘标题栏）
+高_顶行 = 44
+#: 面板头高度。项目树 / 语法对照表 / 运行窗口三个面板**共用一个值** ——
+#: 它们横向并排，高度不一致会让人一眼看出「有一个是歪的」。
+#: 0.2.7 之前运行窗头单独用了 30（其余 32），并排时差 2px。
+高_面板头 = 32
+#: 状态栏 / 面包屑高度
+高_状态栏 = 26
+#: 运行窗底部输入行高度
+高_输入行 = 36
+
 
 
 def 夹字号(字号):
@@ -227,9 +266,11 @@ QToolTip {
     border-radius: 0px;
 }
 
-/* 标题栏 */
-#titleBar { background: __窗口__; border-top-left-radius: 12px; border-top-right-radius: 12px; }
-#titleText { color: __文本__; font-size: 13px; }
+/* 顶行（#topRow）。
+   原先这里还有 #titleBar / #titleText / #toolBar 三条规则，0.2.7 删除：
+   它们是「独立标题栏 + 独立工具条」布局留下的对象名。Qt 新 UI 已经把
+   菜单、项目名、搜索框合并进 #topRow，代码里再没有这些 objectName
+   的控件 —— 留着是纯死规则，还会误导后来者以为有个 titleBar 可调。 */
 #brandMark { background: transparent; }
 #menuBtn {
     color: __次要文本__; font-size: 15px;
@@ -265,8 +306,6 @@ QToolTip {
 }
 #searchBox:focus { border: 1px solid __强调__; }
 
-/* 主工具条 */
-#toolBar { background: __窗口__; border-bottom: 1px solid __边框__; }
 #toolBtn {
     color: __文本__; background: transparent;
     padding: 6px 12px; border-radius: 6px; font-size: 13px;
@@ -286,6 +325,50 @@ QSplitter::handle:hover { background: __强调__; }
     background: __窗口__; color: __次要文本__;
     font-size: 12px; border-bottom: 1px solid __边框__;
 }
+/* 侧边面板容器（项目树所在的那一列、设置窗口左侧分类栏）。
+   代码里有两处 setObjectName("sidePanel")，但 QSS 一直没有对应规则 ——
+   它落到全局 QWidget 的 __窗口__ 底上，于是项目树区域
+   （#panelHeader 之上、QTreeWidget 之外的那圈留白）是窗口色，
+   和面板应有的 __面板__ 色差一档，看起来像「项目树没铺满」。
+   这里给它明确的底色。 */
+#sidePanel { background: __面板__; }
+
+/* 语法对照表正文。
+   代码里 setObjectName("refTable")，QSS 里一直没有规则 ——
+   于是它拿到 QPlainTextEdit 的通用样式：__编辑器__ 底（比面板暗一档）、
+   编辑器的 __字号__、以及 6px 竖内边距。对照表是**只读参考**，
+   和运行窗控制台一样属于面板内容，应该用面板底 + 固定小字号，
+   不该跟着编辑器字号一起放大（放大到 40 时对照表一屏只能看几行）。 */
+#refTable {
+    background: __面板__; color: __文本__;
+    /* 对照表是「%-12s = %s」这种按列对齐拼出来的文本，
+       必须用等宽字体才对齐 —— 用界面字体会让中英混排的等号列参差不齐。 */
+    font-family: "__等宽字体__";
+    font-size: 12px;
+    border: none; padding: 6px 8px;
+    selection-background-color: __选区__;
+}
+
+/* 状态栏左侧两段文字。
+   代码里 #statusLeft / #statusRight 都在用，QSS 只定义了它俩，
+   但状态栏里还有「项目名」那一段用的是 #statusLeft —— 已覆盖。
+   这里补充：左侧文字自动省略（过长时显示 …），
+   否则一条带完整路径的提示会把右侧的行列/编码信息顶出窗口。 */
+#statusLeft {
+    color: __次要文本__; font-size: 11px; background: transparent;
+}
+
+/* 查找/快速打开对话框里的输入框。
+   代码里 setObjectName("输入框")，QSS 没有这条规则 ——
+   它只拿到通用 QLineEdit 样式，和顶行搜索框(#searchBox)的
+   圆角/内边距/聚焦边框颜色不完全一致。统一成同一套观感。 */
+#输入框 {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px;
+    padding: 5px 10px;
+    selection-background-color: __选区__;
+}
+#输入框:focus { border: 1px solid __强调__; }
 
 /* 项目树 */
 QTreeWidget {
@@ -311,7 +394,22 @@ QTabBar::tab:selected {
 }
 QTabBar::tab:hover:!selected { background: __悬停__; color: __文本__; }
 QTabBar::close-button {
-    image: none; subcontrol-position: right;
+    /* 这里曾经写的是 `image: none`，本意是「别用 Qt 的默认关闭图标」，
+       实际效果是把关闭按钮整个清空 —— 代码里 setTabsClosable(True) 打开，
+       但用户界面上根本看不到那个 ✕，只能靠右键菜单或 Ctrl+W 关标签。
+       Qt 的 QTabBar::close-button 只能用图片，QSS 不认 CSS 那种
+       用文字/边框拼出来的「×」。所以这里给一张内嵌的 SVG：
+       用 data: URI 写进去，单文件打包后不会因为相对路径失效
+       （这正是当初改成 image:none 的原因，换个手段解决即可）。
+       颜色用浅灰（#9AA0AB），深浅两套主题下都能看清。 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%239AA0AB' stroke-width='1.4' stroke-linecap='round'/></svg>");
+    subcontrol-position: right;
+    width: 10px; height: 10px;
+    margin-right: 6px;
+}
+QTabBar::close-button:hover {
+    /* 悬停时换成偏红的深色，提示「点这里会关掉」 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%23C75450' stroke-width='1.6' stroke-linecap='round'/></svg>");
 }
 
 /* 编辑器 */
@@ -464,6 +562,12 @@ QLabel { background: transparent; }
 #pageTitle { color: __文本__; font-size: 17px; font-weight: bold; background: transparent; }
 #groupTitle { color: __文本__; font-weight: bold; background: transparent; }
 #hintText  { color: __次要文本__; font-size: 11px; background: transparent; }
+/* 欢迎页那张大字标题（「核语言」）。
+   以前是代码里行内 setStyleSheet("font-size: 30px; …")，
+   既不会被换主题重生成，也不随字号设置缩放 —— 走 QSS 才和其余界面一致。 */
+#welcomeTitle {
+    color: __文本__; font-size: 30px; font-weight: bold; background: transparent;
+}
 #sliderValue { color: __文本__; font-weight: bold; background: transparent; }
 #aboutTitle { color: __文本__; font-size: 15px; font-weight: bold; background: transparent; }
 #linkLabel  { color: __强调__; background: transparent; }

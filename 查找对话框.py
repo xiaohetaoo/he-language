@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+import 主题
+
 
 class 查找对话框(QDialog):
     """非模态的查找替换框，像 PyCharm 那样停在编辑器上方。"""
@@ -32,12 +34,12 @@ class 查找对话框(QDialog):
 
     def _建界面(self):
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(16, 14, 16, 12)
-        布局.setSpacing(8)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
+        布局.setSpacing(主题.间距)
 
         网 = QGridLayout()
-        网.setHorizontalSpacing(8)
-        网.setVerticalSpacing(8)
+        网.setHorizontalSpacing(主题.间距)
+        网.setVerticalSpacing(主题.间距)
 
         网.addWidget(QLabel("查找"), 0, 0)
         self.查找框 = QLineEdit()
@@ -143,7 +145,7 @@ class 跳转对话框(QDialog):
         self.跟主题 = True
 
         布局 = QHBoxLayout(self)
-        布局.setContentsMargins(16, 14, 16, 14)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
         布局.addWidget(QLabel("行号"))
         self.框 = QLineEdit()
         self.框.setObjectName("输入框")

@@ -6,10 +6,11 @@
 
 import os
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout,
 )
+
+import 主题
 
 跳过目录 = {"__pycache__", "build", "dist", "版本", ".git", ".idea", ".vscode"}
 跳过后缀 = (".pyc", ".pkg", ".pyz", ".toc", ".exe", ".zip")
@@ -30,8 +31,8 @@ class 快速打开(QDialog):
         self.候选 = list(self.全部文件)
 
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(14, 12, 14, 12)
-        布局.setSpacing(8)
+        布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
+        布局.setSpacing(主题.间距)
 
         self.输入框 = QLineEdit()
         self.输入框.setObjectName("输入框")

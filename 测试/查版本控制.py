@@ -142,7 +142,18 @@ try:
        "面板 %d 行 / 状态 %d 项" % (行数, len(s["改动"])))
     检("概要非空", bool(面板.概要.text()), "概要=%r" % 面板.概要.text())
     面板.刷新()
-    检("刷新后仍正常", 面板.树.topLevelItemCount() == 行数)
+    # 0.2.7 起「刷新」走后台线程（避免大仓库点一下白屏几秒），
+    # 结果由信号回填。这里等它填回来再比对 —— 语义仍然是
+    # 「刷新之后表格内容依然正确」，只是不再假设它是同步的。
+    截止 = time.time() + 10
+    while time.time() < 截止:
+        应用.processEvents()
+        if not 面板.树.topLevelItemCount():
+            time.sleep(0.02)
+            continue
+        break
+    检("刷新后仍正常", 面板.树.topLevelItemCount() == 行数,
+       "刷新后=%d 行 / 原=%d 行" % (面板.树.topLevelItemCount(), 行数))
     面板.close()
     面板.deleteLater()
 except Exception as e:  # noqa: BLE001

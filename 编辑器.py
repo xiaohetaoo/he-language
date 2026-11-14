@@ -161,7 +161,6 @@ class 高亮器(QSyntaxHighlighter):
             `核异常 值错误, 类型错误：`    -> [值错误, 类型错误]（无括号并列也染）
         """
         区间 = []
-        括号里 = False
         i = 位置
         # 「核作为」之后一律是变量名，扫到它就停
         停 = 文本.find("核作为", i)
@@ -176,14 +175,12 @@ class 高亮器(QSyntaxHighlighter):
             # `核异常（值错误）：` 染不上异常名色，而全角逗号却已认，
             # 半全角口径不对称。
             elif 核.规范化单字(c) == "(":
-                括号里 = True
                 i += 1
             elif c in ",，":
                 # 逗号后面还有名字：有括号时是并列，无括号时也是并列
                 # （`核异常 A, B：` 翻译器会自动补括号，高亮跟着染，两边口径一致）
                 i += 1
             elif 核.规范化单字(c) == ")":
-                括号里 = False
                 i += 1
                 break
             elif c == "_" or c.isalnum() or c.isidentifier():
@@ -455,6 +452,11 @@ class 编辑器(QPlainTextEdit):
         self.主窗 = 主窗
         self.文件路径 = None
         self.已改 = False
+        # 文件的原始编码（由 核.读源码(路径, 返回编码=True) 给出）。
+        # 保存时按它写回 —— 以前一律 UTF-8，打开 GBK 文件改一个字再存
+        # 就把编码**静默**改掉了，别的老工具打开全是乱码。
+        # 新建文档默认 UTF-8。
+        self.编码 = "utf-8"
         # 制表宽从主窗读：设置里改缩进要作用于**已打开**的文档，
         # 以前写死 4，只有新建的文档才拿到新值。
         self.制表宽 = int(getattr(主窗, "制表宽", 4))
@@ -702,30 +704,44 @@ class 编辑器(QPlainTextEdit):
     def _串态表(self):
         """「每块开头所处的三引号」列表，按需重算并缓存。
 
-        缓存键取 (块数, 字符数, 编辑位置)：三者任一变化就重算一次。
-        **不能在每次查询时重算** —— 应用折叠会逐块问一遍，
-        每问一次都扫全文就是 O(n²)。
+        **缓存必须能在按键路径上真正命中**（0.2.7 修）。
+        以前缓存键是 (块数, 字符数, 编辑位置)，而这三个在**每敲一个字符**
+        时都会变 —— 等于每次按键都重算一遍全文。2000 行的文档跟着一次
+        全文扫描，按键代价每下多出 4–10ms；再叠上「有折叠时每次按键都要
+        走一遍 应用折叠()」，手感明显发滞。
+
+        现在按块数分两种情况：
+          · 块数没变（改动只是在某一行内部增删字符）→
+            从改动所在块的**前一块**末态起算，只重算后面那一段；
+          · 块数变了（增删了换行）→ 全量重算。
         """
         文档 = self.document()
-        键 = (
-            文档.blockCount(),
-            文档.characterCount(),
-            getattr(self, "_编辑位置", -1),
-        )
-        if getattr(self, "_串态键", None) == 键:
-            return self._串态缓存
-        表 = []
-        起始 = None
-        块 = 文档.firstBlock()
-        while 块.isValid():
-            表.append(起始)
-            # 复用内核扫描器：与翻译器、高亮器同一套口径，
-            # 三处各写一份必然漂移。
-            _, _, 未闭合 = 核.扫描行(块.text(), 起始)
-            起始 = 未闭合
-            块 = 块.next()
+        块数 = 文档.blockCount()
+        表 = getattr(self, "_串态缓存", None)
+
+        全量 = 表 is None or len(表) != 块数
+        if 全量:
+            表 = [None] * 块数
+            起号 = 0
+        else:
+            # 块数没变：改动点之前的状态不会变，从它所在块的前一块起算。
+            改动块 = getattr(self, "_编辑块", 0)
+            起号 = max(0, min(改动块, 块数 - 1))
         self._串态缓存 = 表
-        self._串态键 = 键
+
+        # 「起号 这一块开头所处的引号」= 前一块扫完时的未闭合引号。
+        起始 = None
+        if 起号 > 0:
+            前块 = 文档.findBlockByNumber(起号 - 1)
+            前入 = 表[起号 - 1] if 起号 - 1 < len(表) else None
+            _, _, 起始 = 核.扫描行(前块.text(), 前入)
+
+        块 = 文档.findBlockByNumber(起号)
+        while 块.isValid():
+            表[块.blockNumber()] = 起始
+            # 复用内核扫描器：与翻译器、高亮器同一套口径。
+            _, _, 起始 = 核.扫描行(块.text(), 起始)
+            块 = 块.next()
         return 表
 
 
@@ -1235,6 +1251,9 @@ class 编辑器(QPlainTextEdit):
         # 拿不到就别用缓存（_缓存边界 会一律判失效），宁慢不错。
         游 = self.textCursor()
         self._编辑位置 = min(游.position(), 游.anchor())
+        # 同时记住「改在哪一块」：_串态表 靠它做增量重算 ——
+        # 这一块之前的行状态不会变，只需要从它所在块的前一块往后重扫。
+        self._编辑块 = 游.blockNumber()
         # 有折叠时才重算可见性：折叠标记挂在块上，
         # 编辑之后块的相对关系会变（缩进改了、冒号删了），
         # 必须重新算一遍「哪些块该藏起来」。没有折叠就完全跳过 ——
@@ -1310,7 +1329,15 @@ class 编辑器(QPlainTextEdit):
             if 顶 > 可见底:
                 break
             高 = int(矩形.height())
-            if 顶 + 高 >= 0:
+            # 折叠起来的块高度为 0，而且它不是「这一行有内容但被藏起来」，
+            # 而是整块不占位。以前这里不判可见性，于是：
+            #   · 折叠区内部的每一行都在它的顶边位置画一条 0 高的线
+            #     （看不见，但白白走一遍循环）；
+            #   · 更明显的是收尾行（折叠区外、高度正常的那一行）会继承
+            #     前面几十行叠出来的位置偏移，竖线被画在错误的高度上 ——
+            #     用户看到的是「折起来之后，下面一行莫名多出一道竖线」。
+            # 判 isVisible() 直接跳过被藏起来的块，顺带省掉它们的绘制成本。
+            if 块.isVisible() and 顶 + 高 >= 0:
                 文 = 块.text()
                 if 文.strip():
                     # 这行有几级缩进，就在它**外面**的层级画线
@@ -1481,16 +1508,24 @@ class 编辑器(QPlainTextEdit):
         以前这里自己写 rstrip().endswith(":")，不剥行尾注释，
         于是「核若 对： 核核 说明」后回车不缩进，而同一行却能折叠：
         同一个「块开头」两处口径不一致，用户看到的是莫名其妙的行为。
+
+        **缩进前缀要逐字符照抄，不能按长度重造**（0.2.7 修）：
+        以前是算一个「缩进字符数」再拼等量半角空格，
+        于是用全角空格（U+3000）缩进的行 —— 中文输入法下很容易打出来 ——
+        回车后缩进会变成同等**个数的半角空格，视觉宽度直接减半**，
+        看起来像缩进被吃掉了一截。现在直接复用上一行的原始前缀。
         """
         光标 = self.textCursor()
         行文 = 光标.block().text()[: 光标.positionInBlock()]
-        缩进 = len(行文) - len(行文.lstrip(" \t\u3000"))
-        额外 = self.制表宽 if self.是块开头(行文) else 0
-        空格 = " " * (缩进 + 额外)
+        # 前缀 = 这一行开头连续的空白字符（半角空格 / 制表符 / 全角空格），
+        # 原样保留：半角还是半角、全角还是全角、制表符还是制表符。
+        前缀 = 行文[: len(行文) - len(行文.lstrip(" \t\u3000"))]
+        额外 = " " * self.制表宽 if self.是块开头(行文) else ""
+        缩进 = 前缀 + 额外
         super().keyPressEvent(事件)
-        if 空格:
+        if 缩进:
             游 = self.textCursor()
-            游.insertText(空格)
+            游.insertText(缩进)
             self.setTextCursor(游)
 
     def _缩进选中行(self, 方向):
@@ -1674,18 +1709,32 @@ class 编辑器(QPlainTextEdit):
     # —— 查找 ——
 
     def 查找下一个(self, 词, 区分大小写=False):
+        """从当前光标往下找；找不到就绕回文首再找一次。
+
+        绕回时**不能**把光标留在文首 —— 以前是 movePosition(Start) 之后
+        接着 find()，find 失败时光标就停在文件开头了。用户在第 500 行
+        搜一个不存在的词，会看到文档「嗖」地滚回顶部、当前行高亮跳到第一行，
+        像是搜索把编辑器重置了。真正找到才该移动光标。
+        """
         if not 词:
             return False
         旗 = QTextDocument.FindFlag(0)
         if 区分大小写:
             旗 = QTextDocument.FindCaseSensitively
-        找到 = self.find(词, 旗)
-        if not 找到:
-            游 = self.textCursor()
-            游.movePosition(QTextCursor.Start)
-            self.setTextCursor(游)
-            找到 = self.find(词, 旗)
-        return bool(找到)
+        if self.find(词, 旗):
+            return True
+        # 绕回文首再试：先记下原位置，找不到就还原。
+        原位 = self.textCursor().position()
+        游 = self.textCursor()
+        游.movePosition(QTextCursor.Start)
+        self.setTextCursor(游)
+        if self.find(词, 旗):
+            return True
+        # 没找到：把光标挪回原处，别留下「跳到文首」的副作用。
+        回 = self.textCursor()
+        回.setPosition(原位)
+        self.setTextCursor(回)
+        return False
 
     def 替换当前(self, 查找词, 替换词, 区分大小写=False):
         """替换当前选中的匹配项（没有选中就先找一个）。
@@ -1705,25 +1754,43 @@ class 编辑器(QPlainTextEdit):
         return True
 
     def 全部替换(self, 查找词, 替换词, 区分大小写=False):
-        """替换全部匹配项，返回替换次数。"""
+        """替换全部匹配项，返回替换次数。
+
+        实现要点：**循环里不调 setTextCursor**。
+        以前每找一个就把游标设给编辑器，于是 500 处替换会触发 500 次
+        「当前行变化 → 整行高亮重算 → 光标移动信号 → 状态栏刷新」，
+        界面还会一路跟着滚到底 —— 替换期间整个窗口都在抖。
+        QPlainTextEdit.find() 是从**自己的 textCursor** 往后找的，
+        所以只需要在开始前设一次游标，之后用 find 的返回值自己维护位置。
+        """
         if not 查找词:
             return 0
         旗 = QTextDocument.FindFlag(0)
         if 区分大小写:
             旗 = QTextDocument.FindCaseSensitively
         次数 = 0
-        游 = QTextCursor(self.document())
-        游.beginEditBlock()
-        游.movePosition(QTextCursor.Start)
-        while True:
-            self.setTextCursor(游)
-            if not self.find(查找词, 旗):
-                break
-            游 = self.textCursor()
-            游.insertText(替换词)
-            次数 += 1
-        游.endEditBlock()
-        self.setTextCursor(QTextCursor(self.document()))
+        原游标 = self.textCursor()
+        # 整段替换合成一个撤销步骤：用户按一次 Ctrl+Z 就该全部还原，
+        # 而不是撤销 N 次。
+        编辑 = self.textCursor()
+        编辑.beginEditBlock()
+        try:
+            起点 = QTextCursor(self.document())
+            起点.movePosition(QTextCursor.Start)
+            self.setTextCursor(起点)
+            while self.find(查找词, 旗):
+                游 = self.textCursor()
+                游.insertText(替换词)
+                次数 += 1
+        finally:
+            编辑.endEditBlock()
+        # 替换完把光标放回原处（找不到就放文首，避免停在半个词中间）。
+        回收 = self.textCursor()
+        try:
+            回收.setPosition(min(原游标.position(), len(self.toPlainText())))
+        except (ValueError, TypeError):
+            回收.movePosition(QTextCursor.Start)
+        self.setTextCursor(回收)
         return 次数
 
     def 跳到行(self, 行号):
@@ -1759,6 +1826,15 @@ class 编辑器(QPlainTextEdit):
         self._载入中 = False
         # 整份文本都换了，旧的折叠状态没有意义（userState 也随旧块一起没了）
         self._折叠数 = 0
+        # 同理，**三引号状态缓存必须整份作废**（0.2.7 修）。
+        # _串态表 的增量重算是靠 _编辑块 决定「从哪一块往后重扫」的，
+        # 而 置文本 期间 _文本变化 被 _载入中 挡住、_编辑块 停在旧值上。
+        # 若新文本块数**恰好与旧文本相同**（比如重新加载一份同样行数的
+        # 文件、或把整篇换成行数一致的另一篇），增量会从错误的位置开始，
+        # 前面那些块继续用旧内容的引号结论 —— 表现为折叠区错乱、
+        # 或本该能折的三引号串折不了（反之亦然）。
+        self._串态缓存 = None
+        self._编辑块 = 0
         self.应用折叠()
         self.已改 = bool(标记已改)
         if hasattr(self, "主窗") and self.主窗 is not None:

@@ -19,7 +19,7 @@ import time
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import (
-    QAction, QIcon, QKeySequence, QPixmap, QShortcut, QTextCursor,
+    QAction, QBrush, QColor, QIcon, QKeySequence, QPixmap, QShortcut, QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -165,12 +165,26 @@ def _默认项目目录():
 
 
 class 窗口钮(QLabel):
+    """顶行右上角的最小化 / 最大化 / 关闭。
+
+    尺寸与「同一条顶行里的其他控件」对齐（0.2.7 整理）：
+    顶行高 44，所有控件都在垂直居中位置上。
+      · 窗口钮 46x32，居中 → y = (44-32)/2 = 6
+      · 搜索框高 28，居中 → y = (44-28)/2 = 8
+    两者高度不同是正常的（按钮要比输入框高一点才好点），
+    但**都必须居中**；以前搜索框直接由布局摆放，窗口钮用 setFixedSize，
+    在 44px 的顶行里一高一低，右半边看起来是斜的。
+    """
+
+    宽 = 46
+    高 = 32
+
     def __init__(self, 字, 提示, 关闭类=False, 父=None):
         super().__init__(字, 父)
         self.setObjectName("关闭钮" if 关闭类 else "窗口钮")
         self.setToolTip(提示)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedSize(46, 32)
+        self.setFixedSize(self.宽, self.高)
         self.setCursor(Qt.PointingHandCursor)
 
 
@@ -221,11 +235,11 @@ class 顶行(QWidget):
         self.主窗 = 主窗
         self._拖点 = None
         self.setObjectName("topRow")
-        self.setFixedHeight(44)
+        self.setFixedHeight(主题.高_顶行)
 
         布局 = QHBoxLayout(self)
-        布局.setContentsMargins(10, 0, 0, 0)
-        布局.setSpacing(4)
+        布局.setContentsMargins(主题.内边距, 0, 0, 0)
+        布局.setSpacing(主题.间距_紧)
 
         标 = QLabel()
         标.setObjectName("brandMark")
@@ -282,9 +296,14 @@ class 顶行(QWidget):
         self.运行钮.setCursor(Qt.PointingHandCursor)
         self.运行钮.setToolTip("运行（F5）")
         self.运行钮.setAlignment(Qt.AlignCenter)
-        self.运行钮.setFixedWidth(30)
+        # 给一个「正方形可点区域」而不是只包住 14px 的图标：
+        # 以前设的是 setFixedWidth(30) 却没有高度约束，QLabel 会撑满顶行高（44），
+        # 于是可点区是个 30x44 的竖条 —— 看起来像图标上下各空一大块，
+        # 和右边等高的搜索框（28）视觉重心也不一致。
+        self.运行钮.setFixedSize(32, 32)
         self.运行钮.mousePressEvent = lambda e: 主窗.运行()
         布局.addWidget(self.运行钮)
+        布局.addSpacing(主题.间距_紧)
 
         # 设置入口只在左侧竖条底部保留一个（顶行不再重复放齿轮）
 
@@ -294,7 +313,7 @@ class 顶行(QWidget):
         self.搜索.setFixedWidth(170)
         self.搜索.returnPressed.connect(主窗.查找)
         布局.addWidget(self.搜索)
-        布局.addSpacing(6)
+        布局.addSpacing(主题.间距_紧)
 
         self.最小化 = 窗口钮("—", "最小化")
         self.最大化 = 窗口钮("□", "最大化 / 还原")
@@ -484,8 +503,8 @@ class 左竖条(QWidget):
         self.setFixedWidth(44)
 
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(6, 8, 6, 8)
-        布局.setSpacing(6)
+        布局.setContentsMargins(主题.内边距_竖, 主题.内边距, 主题.内边距_竖, 主题.内边距)
+        布局.setSpacing(主题.间距)
 
         # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别。
         # 颜色不写死，改成主题表里的键，主题一换整体重画。
@@ -759,10 +778,10 @@ class 主窗(QMainWindow):
 
         头行 = QWidget()
         头行.setObjectName("panelHeader")
-        头行.setFixedHeight(32)
+        头行.setFixedHeight(主题.高_面板头)
         头布局 = QHBoxLayout(头行)
-        头布局.setContentsMargins(10, 0, 8, 0)
-        头布局.setSpacing(6)
+        头布局.setContentsMargins(主题.内边距, 0, 主题.内边距, 0)
+        头布局.setSpacing(主题.间距_紧)
         收起 = QLabel("▾")
         收起.setObjectName("crumb")
         收起.setCursor(Qt.PointingHandCursor)
@@ -808,7 +827,7 @@ class 主窗(QMainWindow):
 
         self.屑 = QLabel("  ")
         self.屑.setObjectName("panelHeader")
-        self.屑.setFixedHeight(26)
+        self.屑.setFixedHeight(主题.高_状态栏)
         布局.addWidget(self.屑)
 
         self.容器 = QWidget()
@@ -833,7 +852,9 @@ class 主窗(QMainWindow):
 
         标题 = QLabel("核语言")
         标题.setAlignment(Qt.AlignCenter)
-        标题.setStyleSheet("font-size: 30px; font-weight: bold; background: transparent;")
+        # 走 objectName + 主题 QSS，不在代码里写死字号与字重：
+        # 行内 setStyleSheet 不会被换主题重生成，也无法随字号设置缩放。
+        标题.setObjectName("welcomeTitle")
         欢迎.addWidget(标题)
 
         副标 = QLabel("用中文写程序")
@@ -866,9 +887,15 @@ class 主窗(QMainWindow):
         布局.setContentsMargins(0, 0, 0, 0)
         布局.setSpacing(0)
 
-        头 = QLabel("  语法对照表")
+        头 = QWidget()
         头.setObjectName("panelHeader")
-        头.setFixedHeight(32)
+        头.setFixedHeight(主题.高_面板头)
+        头布局 = QHBoxLayout(头)
+        头布局.setContentsMargins(主题.内边距, 0, 主题.内边距, 0)
+        头布局.setSpacing(主题.间距_紧)
+        标 = QLabel("语法对照表")
+        头布局.addWidget(标)
+        头布局.addStretch(1)
         布局.addWidget(头)
 
         self.对照 = QPlainTextEdit()
@@ -907,10 +934,13 @@ class 主窗(QMainWindow):
 
         头 = QWidget()
         头.setObjectName("runHeader")
-        头.setFixedHeight(30)
+        # 高度与另外两个面板头对齐（都走 主题.高_面板头）。
+        # 以前这里写的是 30，而项目树头与对照表头是 32 —— 三个面板并排时，
+        # 运行窗的标题线比另外两个高 2px，横向看过去是歪的。
+        头.setFixedHeight(主题.高_面板头)
         头布局 = QHBoxLayout(头)
-        头布局.setContentsMargins(14, 0, 10, 0)
-        头布局.setSpacing(14)
+        头布局.setContentsMargins(主题.内边距, 0, 主题.内边距, 0)
+        头布局.setSpacing(主题.间距)
 
         self.运行标题 = QLabel("运行")
         self.运行标题.setObjectName("runTitle")
@@ -939,10 +969,10 @@ class 主窗(QMainWindow):
 
         输入行 = QWidget()
         输入行.setObjectName("runHeader")
-        输入行.setFixedHeight(40)
+        输入行.setFixedHeight(主题.高_输入行)
         输入布局 = QHBoxLayout(输入行)
-        输入布局.setContentsMargins(14, 5, 10, 5)
-        输入布局.setSpacing(8)
+        输入布局.setContentsMargins(主题.内边距, 主题.内边距_竖, 主题.内边距, 主题.内边距_竖)
+        输入布局.setSpacing(主题.间距)
         标 = QLabel("输入")
         标.setObjectName("runStatus")
         输入布局.addWidget(标)
@@ -959,10 +989,10 @@ class 主窗(QMainWindow):
     def _建状态栏(self):
         条 = QWidget()
         条.setObjectName("statusBar")
-        条.setFixedHeight(26)
+        条.setFixedHeight(主题.高_状态栏)
         布局 = QHBoxLayout(条)
-        布局.setContentsMargins(14, 0, 14, 0)
-        布局.setSpacing(18)
+        布局.setContentsMargins(主题.内边距, 0, 主题.内边距, 0)
+        布局.setSpacing(主题.间距_段)
         self.状态项目 = QLabel("")
         self.状态项目.setObjectName("statusLeft")
         self.状态左 = QLabel("")
@@ -1078,11 +1108,29 @@ class 主窗(QMainWindow):
         编 = 编辑器(self)
         编.已改 = False
         编.hide()
+        编.未命名标题 = self._未命名标题()
         self.文档集.append(编)
-        self.标签栏.addTab("未命名")
+        self.标签栏.addTab(编.未命名标题)
         self.标签栏.setCurrentIndex(len(self.文档集) - 1)
         self._显示文档(编)
         return 编
+
+    def _未命名标题(self):
+        """给新文档起一个不重复的名字：未命名 / 未命名 2 / 未命名 3 …
+
+        以前固定写 "未命名"：连按三次 Ctrl+N 就有三个一模一样的标签，
+        用户在标签栏里根本分不清哪个是刚写的、哪个是空的。
+        （PyCharm 用的是 Untitled1/2/3，同一思路。）
+        序号只在「已被占用」时递增，第一个仍是干净的「未命名」。
+        """
+        已用 = {self.标签栏.tabText(i) for i in range(self.标签栏.count())}
+        已用 |= {self._文件名(d).lstrip("● ") for d in self.文档集 if not d.文件路径}
+        if "未命名" not in 已用:
+            return "未命名"
+        序 = 2
+        while ("未命名 %d" % 序) in 已用:
+            序 += 1
+        return "未命名 %d" % 序
 
     def _显示文档(self, 编):
         self.无文档提示.hide()
@@ -1182,7 +1230,16 @@ class 主窗(QMainWindow):
                 self.标签栏.setTabText(i, 名)
 
     def _文件名(self, 编):
-        return os.path.basename(编.文件路径) if 编.文件路径 else "未命名"
+        """标签上显示的名字。
+
+        未命名文档用建出来时分配的 **编.未命名标题**（未命名 / 未命名 2 …），
+        不是硬编码的「未命名」—— 否则三个新标签在刷新标题时
+        又会全部变回同一个名字（刷新标签 → _文件名 → "未命名"）。
+        """
+        路径 = getattr(编, "文件路径", None)
+        if 路径:
+            return os.path.basename(路径)
+        return getattr(编, "未命名标题", None) or "未命名"
 
     def 关闭文档(self, 编, 强制=False):
         if 编.已改 and not 强制:
@@ -1235,7 +1292,7 @@ class 主窗(QMainWindow):
             self.状态("文件不存在：%s" % 路径)
             return None
         try:
-            内容 = self.内核.读源码(路径)
+            内容, 编码 = self.内核.读源码(路径, 返回编码=True)
         except OSError as e:
             self.状态("打不开文件：%s" % e)
             return None
@@ -1244,6 +1301,8 @@ class 主窗(QMainWindow):
             return None
         编 = 编辑器(self)
         编.文件路径 = os.path.abspath(路径)
+        # 记住这个文件原本是什么编码，保存时按它写回（见 编辑器.编码）。
+        编.编码 = 编码
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
         编.hide()
         self.文档集.append(编)
@@ -1274,10 +1333,28 @@ class 主窗(QMainWindow):
             文本 = 编.取文本()
             路径 = 编.文件路径
             临时 = 路径 + ".核工坊.tmp"
-            with open(临时, "w", encoding="utf-8", newline="\n") as f:
-                f.write(文本)
-                f.flush()
-                os.fsync(f.fileno())
+            # 按文件**原本的编码**写回（0.2.7 修）。
+            # 以前固定 encoding="utf-8"：打开一个 GBK 编码的 .xht、
+            # 改一个字、保存，文件就被悄悄转成 UTF-8 了 ——
+            # 用别的老工具（或同项目里其它按 GBK 读的脚本）再打开就是乱码。
+            # 用户看到的是「我只改了一个字，怎么全乱码了」。
+            编码 = getattr(编, "编码", "utf-8") or "utf-8"
+            try:
+                with open(临时, "w", encoding=编码, newline="\n") as f:
+                    f.write(文本)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except UnicodeEncodeError:
+                # 原编码写不下新内容（比如往 GBK 文件里贴了生僻字/emoji）。
+                # 这时候**不能**默默换成 UTF-8 —— 用户会以为编码没变。
+                # 明确改成 UTF-8，同时把新编码记到编辑器上，
+                # 并在状态栏说明，让「编码变了」这件事是可见的。
+                with open(临时, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(文本)
+                    f.flush()
+                    os.fsync(f.fileno())
+                编.编码 = "utf-8"
+                self.状态("原编码 %s 存不下这些字符，已改用 UTF-8" % 编码)
             os.replace(临时, 路径)
         except OSError as e:
             # 写失败：把临时文件清掉，别在项目目录里留垃圾。
@@ -1322,6 +1399,16 @@ class 主窗(QMainWindow):
         if not 路径.lower().endswith(self.内核.扩展名.lower()):
             路径 += self.内核.扩展名
         路径 = os.path.abspath(路径)
+        # 目标是目录时直接拦掉：继续走下去会弹「要覆盖吗」，
+        # 用户点「是」之后 os.replace 到目录上抛 PermissionError，
+        # 得到的是「保存失败」这种语焉不详的提示。
+        if os.path.isdir(路径):
+            QMessageBox.warning(
+                self, "保存失败",
+                "「%s」是一个文件夹，不能当文件名用。\n请换一个名字。" % 路径,
+            )
+            self.状态("保存失败：目标是文件夹")
+            return False
         # 目标已经存在时，再确认一次。
         # 系统的「另存为」对话框一般会自己问「要不要覆盖」，但那依赖原生对话框
         # 的行为（Qt 用非原生实现时不问）。这里自己兜住底 ——
@@ -1375,6 +1462,7 @@ class 主窗(QMainWindow):
             项 = sorted(os.scandir(目录), key=lambda e: (not e.is_dir(), e.name.lower()))
         except OSError:
             return
+        有内容 = False
         for 条 in 项:
             if 条.name.startswith(".") or 条.name in _隐藏项:
                 continue
@@ -1383,12 +1471,27 @@ class 主窗(QMainWindow):
                 子.setIcon(0, 提供.icon(QFileIconProvider.Folder))
                 子.setData(0, Qt.UserRole, 条.path)
                 QTreeWidgetItem(子, ["…"])
+                有内容 = True
             elif 条.name.endswith((".xht", ".py", ".txt", ".md", ".json")):
                 子 = QTreeWidgetItem(节点, [条.name])
                 子.setIcon(0, 提供.icon(QFileIconProvider.File))
                 子.setData(0, Qt.UserRole, 条.path)
+                有内容 = True
+        # 空目录给一句说明。
+        # 以前这里什么都不放：用户设了一个空文件夹当项目，
+        # 面板就是**一片空白**——没有任何文字提示这是「空项目」
+        # 还是「加载失败」。对照表有内容、运行窗有「就绪」，
+        # 只有项目树空着不解释，看起来像坏了。
+        if not 有内容:
+            提示 = QTreeWidgetItem(节点, ["（这个文件夹里没有可显示的文件）"])
+            提示.setToolTip(0, "项目树只显示 .xht / .py / .txt / .md / .json 与子文件夹")
+            提示.setData(0, Qt.UserRole + 1, "占位")   # 标记：不可双击打开
+            提示.setForeground(0, QBrush(QColor(self.主题["禁用文本"])))
 
     def _双击树(self, 项, _列):
+        # 占位提示项（空目录说明 / 懒加载的「…」）不可双击打开。
+        if 项.data(0, Qt.UserRole + 1) == "占位":
+            return
         路径 = 项.data(0, Qt.UserRole)
         if not 路径:
             return
@@ -1573,7 +1676,7 @@ class 主窗(QMainWindow):
             self.进程 = None
             return
         self.运行状态.setText("运行中…")
-        self.运行状态.setStyleSheet("color: %s;" % self.主题["强调"])
+        self._刷新运行状态样式("运行")
         self.竖条.设状态点("运行")
         self._读线程 = threading.Thread(
             target=self._读输出, args=(self.进程, self._输出), daemon=True
@@ -1644,7 +1747,7 @@ class 主窗(QMainWindow):
             self._收尾()
             self._写控制台("\n[程序结束，返回 %d]\n" % 码)
             self.运行状态.setText("就绪")
-            self.运行状态.setStyleSheet("")
+            self._刷新运行状态样式("就绪")
             self.竖条.设状态点("空闲")
             self.状态("运行结束（返回 %s）" % 码)
             if self._轮询:
@@ -1709,9 +1812,35 @@ class 主窗(QMainWindow):
             except OSError:
                 pass
 
+    def _刷新运行状态样式(self, 状态):
+        """按运行状态给「运行中 / 就绪」那个标签换色。
+
+        为什么统一走一个方法：以前 运行() / _检查进程() / 停止() 三处
+        各自写 setStyleSheet("color: …") 和 setStyleSheet("")，
+        三处的「回到就绪」写法还不完全一样。现在只在这里决定：
+        · 运行中 → 主题的「强调」色（和顶栏运行按钮同一套观感）
+        · 就绪   → 空样式表，回落到 #runStatus 的 __次要文本__
+        只改这一个控件的行内样式，不会覆盖主题里的其它规则。
+        """
+        if 状态 == "运行":
+            self.运行状态.setStyleSheet("color: %s;" % self.主题["强调"])
+        else:
+            self.运行状态.setStyleSheet("")
+
     def _收尾(self):
+        """关掉子进程的管道，并把进程/读线程引用一起清干净。
+
+        **必须同时清 `_读线程`**（0.2.7 修）：以前只关流、只把 进程 置 None，
+        读线程对象自己还活着。下一次 运行() 会直接覆盖 self._读线程，
+        旧线程从此没人管 —— 它正在 read1 上等数据，要等流被真正关闭
+        才会退出来，中途空转几百毫秒到几秒。连续运行十几次就是十几个
+        这样的僵尸线程在后台转，加上每次 _检查进程 里的 join(timeout=1.0)
+        都会等它，停止响应明显变慢。
+        """
         进程 = self.进程
+        线程 = getattr(self, "_读线程", None)
         if 进程 is None:
+            self._读线程 = None
             return
         for 名 in ("stdin", "stdout"):
             流 = getattr(进程, 名, None)
@@ -1721,6 +1850,14 @@ class 主窗(QMainWindow):
                 except (OSError, ValueError):
                     pass
         self.进程 = None
+        # 流已经关了，读线程会很快从 read1 返回并退出；短暂 join 一下，
+        # 拿不到也不强等（daemon 线程，不会拖住退出）。
+        if 线程 is not None and 线程.is_alive():
+            try:
+                线程.join(timeout=0.3)
+            except RuntimeError:
+                pass
+        self._读线程 = None
 
     def 停止(self, 静默=False):
         if self.进程 is None:
@@ -1735,7 +1872,7 @@ class 主窗(QMainWindow):
         if not 静默:
             self._写控制台("\n[已停止]\n")
             self.运行状态.setText("就绪")
-            self.运行状态.setStyleSheet("")
+            self._刷新运行状态样式("就绪")
             self.竖条.设状态点("空闲")
             self.状态("已停止")
 
@@ -2036,21 +2173,32 @@ class 主窗(QMainWindow):
             self.状态("快速打开失败：%s" % e)
 
     def 查找(self):
-        """Ctrl+F：优先用顶行搜索框的内容，否则打开查找对话框。"""
-        文 = self.顶行.搜索.text().strip()
-        if self.当前 is not None and 文:
-            if not self.当前.查找下一个(文):
-                self.状态("没找到：%s" % 文)
-            return
+        """Ctrl+F：打开查找/替换框；顶行搜索框有内容时直接沿用那个词。
+
+        以前的行为是「搜索框有内容 → 只做一次 查找下一个 然后 return」，
+        于是只要搜索框里还留着上次的词，Ctrl+F 就永远打不开替换面板 ——
+        用户必须先手动清空搜索框，而这个前提没人知道。
+        现在的取舍：**打开面板**，并把搜索框的词预填进「查找」栏；
+        想快速定位下一处，继续用搜索框回车（它自己连的是 查找下一个）。
+        """
+        词 = ""
+        try:
+            词 = self.顶行.搜索.text().strip()
+        except (AttributeError, RuntimeError):
+            词 = ""
         try:
             import 查找对话框
 
-            self._查找窗 = 查找对话框.查找对话框(self, self.当前)
+            窗 = 查找对话框.查找对话框(self, self.当前)
             # 非模态窗口：关掉要能自己回收，否则每按一次 Ctrl+F
             # 就常驻一个隐藏 QDialog（实测 5 开 5 残留）。
-            self._查找窗.setAttribute(Qt.WA_DeleteOnClose, True)
-            self._查找窗.show()
-            self._查找窗.raise_()
+            窗.setAttribute(Qt.WA_DeleteOnClose, True)
+            if 词 and hasattr(窗, "查找框"):
+                窗.查找框.setText(词)
+                窗.查找框.selectAll()
+            self._查找窗 = 窗
+            窗.show()
+            窗.raise_()
         except Exception as e:  # noqa: BLE001
             self.状态("打不开查找框：%s" % e)
 
@@ -2176,24 +2324,47 @@ class 主窗(QMainWindow):
         列 = 游.positionInBlock() + 1
         尾 = ""
         if 游.hasSelection():
-            尾 = "   （已选 %d 字符）" % len(游.selectedText())
+            # 用位置相减，不要 len(selectedText())：
+            # selectedText() 会把整段选中内容**复制成字符串**再求长度。
+            # 全选一篇几万行的文件之后，每次光标移动（甚至只是方向键）
+            # 都要复制一遍全文，界面会有明显卡顿。
+            尾 = "   （已选 %d 字符）" % (游.selectionEnd() - 游.selectionStart())
+        # 编码显示真实值：以前固定写 "UTF-8"，打开一个 GBK 文件时
+        # 状态栏在说谎。现在取编辑器记下的原编码。
+        编码 = (getattr(编, "编码", "utf-8") or "utf-8").replace("utf-8-sig", "UTF-8 BOM").replace("utf-8", "UTF-8").replace("gbk", "GBK")
         self.状态右.setText(
-            "核语言   空格 %d   UTF-8   行 %d, 列 %d%s" % (self.制表宽, 行, 列, 尾)
+            "核语言   空格 %d   %s   行 %d, 列 %d%s"
+            % (self.制表宽, 编码, 行, 列, 尾)
         )
 
     # ================= 菜单 =================
 
     @staticmethod
-    def _加动作(菜单, 文本, 命令, 提示=None):
+    def _加动作(菜单, 文本, 命令, 提示=None, 键=None):
         """往菜单里加一个动作。
 
         父对象必须是**菜单**而不是主窗：菜单用完就销毁，
         挂在主窗上的动作不会被回收 —— 每开一次菜单就往主窗里堆
         四十来个 QAction，反复点几次内存就 steadily 涨上去。
+
+        `键` 只在菜单右侧显示成快捷键提示，**不参与按键分发**：
+
+        · 不能用「拼进文字」的做法（`"运行\\tF5"`）—— 那样所有依赖
+          `动作.text()` 的代码与测试都会拿到带制表符的名字，很难看。
+        · 也不能用默认的 setShortcut：那会把键注册到窗口级，
+          与 _绑快捷键 里的 QShortcut 撞车，同一个键触发两次
+          （F5 一次起两个进程）。
+        · 正确做法是 setShortcut 之后把它限定成 WidgetShortcut ——
+          只有当焦点在**这个菜单**上时才可能生效，而菜单是模态弹层、
+          弹出期间 QShortcut 不参与分发，两者不会同时触发。
+          菜单右侧照样会把键序列画出来，用户看得到。
         """
         动作 = QAction(文本, 菜单)
         if 提示:
             动作.setToolTip(提示)
+        if 键:
+            动作.setShortcut(QKeySequence(键))
+            动作.setShortcutContext(Qt.WidgetShortcut)
         动作.triggered.connect(lambda _=False, c=命令: c())
         return 动作
 
@@ -2213,17 +2384,17 @@ class 主窗(QMainWindow):
         """
         菜单 = QMenu(self)
         文件 = 菜单.addMenu("文件")
-        for 名, 命令 in (
-            ("新建", self.新建),
-            ("打开…", self.打开文件),
-            ("快速打开…", self.快速打开),
-            ("打开文件夹…", self.选择项目目录),
-            ("保存", self.保存当前),
-            ("另存为…", self.另存为),
-            ("关闭标签", self.关闭当前),
-            ("退出", self.退出),
+        for 名, 命令, 键 in (
+            ("新建", self.新建, "Ctrl+N"),
+            ("打开…", self.打开文件, "Ctrl+O"),
+            ("快速打开…", self.快速打开, "Ctrl+P"),
+            ("打开文件夹…", self.选择项目目录, None),
+            ("保存", self.保存当前, "Ctrl+S"),
+            ("另存为…", self.另存为, "Ctrl+Shift+S"),
+            ("关闭标签", self.关闭当前, "Ctrl+W"),
+            ("退出", self.退出, None),
         ):
-            文件.addAction(self._加动作(文件, 名, 命令))
+            文件.addAction(self._加动作(文件, 名, 命令, 键=键))
 
         最近 = 文件.addMenu("最近打开")
         for 路径 in self.最近[:10]:
@@ -2253,48 +2424,66 @@ class 主窗(QMainWindow):
         ):
             编.addAction(self._加动作(编, 名, 命令))
         编.addSeparator()
-        for 名, 命令 in (
-            ("注释 / 取消注释", self.切换注释),
-            ("查找 / 替换…", self.查找),
-            ("转到行…", self.跳到行),
+        for 名, 命令, 键 in (
+            ("注释 / 取消注释", self.切换注释, "Ctrl+/"),
+            ("查找 / 替换…", self.查找, "Ctrl+F"),
+            ("转到行…", self.跳到行, "Ctrl+G"),
         ):
-            编.addAction(self._加动作(编, 名, 命令))
+            编.addAction(self._加动作(编, 名, 命令, 键=键))
         菜单.addSeparator()
 
         码 = 菜单.addMenu("代码")
-        for 名, 命令 in (
-            ("折叠当前块", self.折叠当前),
-            ("展开当前块", self.展开当前),
-            ("全部折叠", self.全部折叠),
-            ("全部展开", self.全部展开),
+        for 名, 命令, 键 in (
+            ("折叠当前块", self.折叠当前, "Ctrl+Shift+["),
+            ("展开当前块", self.展开当前, "Ctrl+Shift+]"),
+            ("全部折叠", self.全部折叠, "Ctrl+Shift+9"),
+            ("全部展开", self.全部展开, "Ctrl+Shift+0"),
         ):
-            码.addAction(self._加动作(码, 名, 命令))
+            码.addAction(self._加动作(码, 名, 命令, 键=键))
         菜单.addSeparator()
 
         运 = 菜单.addMenu("运行")
-        for 名, 命令 in (
-            ("运行", self.运行),
-            ("停止", lambda: self.停止()),
-            ("检查语法", self.检查语法),
-            ("未定义清单", self.打开未定义清单),
+        for 名, 命令, 键 in (
+            ("运行", self.运行, "F5"),
+            ("停止", lambda: self.停止(), "Shift+F5"),
+            ("检查语法", self.检查语法, "F9"),
+            ("未定义清单", self.打开未定义清单, None),
         ):
-            运.addAction(self._加动作(运, 名, 命令))
+            运.addAction(self._加动作(运, 名, 命令, 键=键))
         菜单.addSeparator()
 
         视 = 菜单.addMenu("视图")
         for 名, 命令 in (
             ("深色主题", lambda: self.换主题("深色")),
             ("浅色主题", lambda: self.换主题("浅色")),
-            ("项目栏", self.切换项目栏),
-            ("语法对照表", self.切换对照表),
-            ("运行窗口", self.切换运行窗),
-            ("显示行号", self.切换行号),
-            ("显示缩进参考线", self.切换缩进线),
-            ("增大字号", lambda: self.改字号(1)),
-            ("减小字号", lambda: self.改字号(-1)),
-            ("版本控制", self.版本控制面板),
         ):
             视.addAction(self._加动作(视, 名, 命令))
+        视.addSeparator()
+        # 这几项是**开关**，用可勾选动作，并在打开菜单时按真实状态回填。
+        # 以前它们全是普通动作：点开菜单看不出「项目栏现在到底开没开」，
+        # 只能点一下再观察界面上有没有变化 —— 而「显示行号」这种
+        # 改变很细微，不盯着看根本分不出刚才那一下是开还是关。
+        for 名, 命令, 状态取值 in (
+            ("项目栏", self.切换项目栏, lambda: self._项目可见),
+            ("语法对照表", self.切换对照表, lambda: self._对照可见),
+            ("运行窗口", self.切换运行窗, lambda: self._运行可见),
+            ("显示行号", self.切换行号, lambda: self.显示行号),
+            ("显示缩进参考线", self.切换缩进线, lambda: self.显示缩进线),
+        ):
+            动作 = self._加动作(视, 名, 命令)
+            动作.setCheckable(True)
+            try:
+                动作.setChecked(bool(状态取值()))
+            except (AttributeError, RuntimeError):
+                pass
+            视.addAction(动作)
+        视.addSeparator()
+        for 名, 命令, 键 in (
+            ("增大字号", lambda: self.改字号(1), "Ctrl+="),
+            ("减小字号", lambda: self.改字号(-1), "Ctrl+-"),
+            ("版本控制", self.版本控制面板, None),
+        ):
+            视.addAction(self._加动作(视, 名, 命令, 键=键))
         菜单.addSeparator()
 
         助 = 菜单.addMenu("帮助")
@@ -2309,7 +2498,7 @@ class 主窗(QMainWindow):
         助.addAction(self._加动作(助, "关于核工坊", self.关于))
         菜单.addSeparator()
 
-        菜单.addAction(self._加动作(菜单, "设置…", self.打开设置))
+        菜单.addAction(self._加动作(菜单, "设置…", self.打开设置, 键="Ctrl+,"))
         return 菜单
 
     def 弹出项目菜单(self, 锚):
@@ -2710,16 +2899,44 @@ class 主窗(QMainWindow):
             事件.acceptProposedAction()
 
     def dropEvent(self, 事件):
+        """拖入文件或文件夹。
+
+        拖入**文件夹**时只切项目树，不静默写死到配置里（0.2.7 调整）：
+        以前 装载项目树() 末尾无条件 存配置()，于是「顺手拖个文件夹进来看看」
+        就永久改掉了下次启动的项目目录，用户完全没被告知。
+        现在拖入的目录只对本次会话生效；要永久记住，
+        通过「打开文件夹…」菜单或设置里显式选择（那两条路本来就有明确意图）。
+        """
+        切了项目 = False
         for url in 事件.mimeData().urls():
             路径 = url.toLocalFile()
             if os.path.isdir(路径):
-                self.装载项目树(路径)
+                self._装载项目树不存配置(路径)
+                切了项目 = True
             elif 路径.lower().endswith(".xht"):
                 self.打开(路径)
         事件.acceptProposedAction()
+        if 切了项目:
+            self.状态("已临时切换项目到 %s（重启后恢复原项目）" % os.path.basename(self.项目目录))
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def _装载项目树不存配置(self, 目录):
+        """装载项目树，但**不**把项目目录写进配置。
+
+        给拖放用：拖进来的文件夹只是「看一下」，不该变成永久设置。
+        做法是装载之后把配置里的项目目录还原回装载前的值 ——
+        比给 装载项目树 加一个开关参数更省事，也不用动那条例行路径
+        （打包自检、菜单、设置窗口都走原来的 装载项目树）。
+        """
+        旧 = self.配置.get("项目目录")
+        self.装载项目树(目录)
+        if 旧 is not None:
+            self.配置["项目目录"] = 旧
+        else:
+            self.配置.pop("项目目录", None)
+        配置.存配置(self.配置)
 
 
 def 启动(参数=None):

@@ -155,8 +155,10 @@ def 主():
 
     def _标签一致():
         _i = w.标签栏.currentIndex()
-        _名 = w.标签栏.tabText(_i) if _i >= 0 else ""
-        _当 = os.path.basename(w.当前.文件路径) if (w.当前 and w.当前.文件路径) else "未命名"
+        _当 = w.标签栏.tabText(_i) if _i >= 0 else ""
+        # 名字口径跟主窗走：无路径文档可能是「未命名 2」这种带序号的
+        # 唯一标题（0.2.7 起），不能再硬编码成「未命名」。
+        _名 = w._文件名(w.当前) if w.当前 else "未命名"
         return _名 == _当, "%s vs %s" % (_名, _当)
 
     w.新建()

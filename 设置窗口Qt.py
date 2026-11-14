@@ -344,10 +344,15 @@ class 设置对话框(QDialog):
         self._同步箭头色()
 
     def _同步箭头色(self):
-        """下拉框的三角箭头是自绘的，换主题后要跟着改色。"""
+        """下拉框的三角箭头是自绘的，换主题后要跟着改色。
+
+        只处理真正存在的下拉框。「字号」是 QSlider（没有箭头），
+        以前这里还挂着 getattr(self, "字号框", None) —— 那个属性
+        根本不存在，永远是 None，是删掉「字号下拉框改成滑动条」时
+        留下的死引用。留着会让人误以为还有一个字号下拉框。
+        """
         色 = self.主窗.主题["次要文本"]
-        for 框 in (getattr(self, "主题框", None), getattr(self, "字号框", None),
-                   getattr(self, "缩进框", None)):
+        for 框 in (getattr(self, "主题框", None), getattr(self, "缩进框", None)):
             if 框 is not None and hasattr(框, "设箭头色"):
                 框.设箭头色(色)
 

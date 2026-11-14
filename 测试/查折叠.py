@@ -343,6 +343,48 @@ du = 编u.document()
 检("外层函数块仍折到第 4 行", 编u.折叠区(du.findBlockByNumber(0)) == 4,
    "区=%r" % (编u.折叠区(du.findBlockByNumber(0)),))
 
+print("== 十七、置文本后三引号缓存必须整份作废（0.2.7 修）==")
+# _串态表 做增量重算时靠 _编辑块 决定「从哪一块往后重扫」。
+# 而 置文本 期间 _文本变化 被 _载入中 挡住，_编辑块 停在旧值上 ——
+# 若新文本块数**恰好与旧文本相同**，增量会从错误位置开始，
+# 前面的块继续沿用旧内容的引号结论，折叠区就会错乱。
+#
+# 这个用例必须让三件事同时成立才能暴露问题（缺一不可）：
+#   1. 新旧文本块数相同 —— 否则 len(表) != 块数 会触发全量重算，掩盖问题；
+#   2. 旧文本的 _编辑块 落在靠后位置 —— 增量只重扫它后面那些块；
+#   3. 旧文本前半段「在串内」、新文本前半段「不在串内」—— 结论相反。
+Q3 = '"' * 3
+编v = 新编("x = %s\n甲\n乙\n丙\n%s\n尾\n" % (Q3, Q3))
+应用.processEvents()
+# 先把缓存**建立起来**（否则第一次 置文本 后缓存还是 None，
+# 后面那次替换会走「全量重算」分支，测不出作废逻辑）。
+_旧表 = 编v._串态表()
+检("旧文本已建立串态缓存", any(x is not None for x in _旧表),
+   "串态表=%r" % (_旧表,))
+# 在末块打字（把 _编辑块 推到 5，且块数不变）
+_末 = 编v.document().blockCount() - 1
+_尾块 = 编v.document().findBlockByNumber(_末)
+_游 = QTextCursor(_尾块)
+_游.movePosition(QTextCursor.EndOfBlock)
+编v.setTextCursor(_游)
+应用.processEvents()
+_游.insertText("z")
+应用.processEvents()
+检("旧文本 _编辑块 已推到末块",
+   getattr(编v, "_编辑块", -1) == _末,
+   "_编辑块=%r 末块=%r" % (getattr(编v, "_编辑块", None), _末))
+
+# 整份换成同样 6 行、但完全没有三引号的文本（块数不变！）
+编v.置文本("a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n")
+应用.processEvents()
+_表 = 编v._串态表()
+_残留 = [i for i, x in enumerate(_表) if x is not None]
+检("置文本后三引号串态全部清零", not _残留,
+   "第 %r 块残留旧结论，串态表=%r" % (_残留, _表))
+_可折 = [i for i in range(编v.document().blockCount())
+        if 编v.可折叠(编v.document().findBlockByNumber(i))]
+检("置文本后新内容不该有可折块", not _可折, "可折块=%r" % (_可折,))
+
 print()
 print("=" * 62)
 if 问题:
