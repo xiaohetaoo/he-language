@@ -103,13 +103,13 @@ class 转译测试(unittest.TestCase):
     def test_未定义记录(self):
         报告 = 内核.未定义报告(None)
         转译(
-            "核说（ascii（1））\n核说（bytearray（1））\n“x”.casefold（）\n核说（1, 核尾=核对）",
+            "核说（breakpoint（））\n核说（__import__（“os”））\n“x”.format_map（）\n核说（1, 核尾=核对）",
             报告,
         )
         类别 = set(报告.条目)
-        self.assertIn(("ascii", "内置函数"), 类别)
-        self.assertIn(("bytearray", "内置函数"), 类别)
-        self.assertIn(("casefold", "方法"), 类别)
+        self.assertIn(("breakpoint", "内置函数"), 类别)
+        self.assertIn(("__import__", "内置函数"), 类别)
+        self.assertIn(("format_map", "方法"), 类别)
         # 已定义的参数（核尾→end）不该被记成未定义
         self.assertNotIn(("核尾", "参数名"), 类别)
         self.assertNotIn(("end", "参数名"), 类别)
@@ -131,8 +131,8 @@ class 转译测试(unittest.TestCase):
     def test_未定义不误报(self):
         # 赋值语句左边的名字是用户自己定义的，不该记进未定义清单
         报告 = 内核.未定义报告(None)
-        转译("len = 3\n核说（len）\n核说（ascii）", 报告)
-        self.assertEqual(list(报告.条目), [("ascii", "内置函数")])
+        转译("len = 3\n核说（len）\n核说（breakpoint）", 报告)
+        self.assertEqual(list(报告.条目), [("breakpoint", "内置函数")])
 
     # —— 以下为 0.0.13 的修复补测 ——
 
@@ -238,15 +238,15 @@ class 转译测试(unittest.TestCase):
         目录 = tempfile.mkdtemp(prefix="核语言报告_")
         路径 = os.path.join(目录, "未定义.txt")
         甲 = 内核.取报告(路径)
-        甲.记录("ascii", "内置函数", "a.xht", 1, 1)
+        甲.记录("breakpoint", "内置函数", "a.xht", 1, 1)
         甲.保存()
         乙 = 内核.取报告(路径)
         self.assertIs(甲, 乙, "同一路径必须拿到同一个实例")
-        乙.记录("bytearray", "内置函数", "b.xht", 2, 1)
+        乙.记录("__import__", "内置函数", "b.xht", 2, 1)
         乙.保存()
         丙 = 内核.未定义报告(路径)
-        self.assertIn(("ascii", "内置函数"), 丙.条目)
-        self.assertIn(("bytearray", "内置函数"), 丙.条目)
+        self.assertIn(("breakpoint", "内置函数"), 丙.条目)
+        self.assertIn(("__import__", "内置函数"), 丙.条目)
         # 空路径不缓存，也不该抛
         self.assertIsNotNone(内核.取报告(None))
         shutil.rmtree(目录, ignore_errors=True)
@@ -262,27 +262,27 @@ class 转译测试(unittest.TestCase):
         路径 = os.path.join(目录, "未定义.txt")
         表头 = "# 清单\n"
         open(路径, "w", encoding="utf-8").write(
-            表头 + "ascii\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
-                   "bytearray\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+            表头 + "breakpoint\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+                   "__import__\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
         )
         甲 = 内核.取报告(路径)
-        self.assertIn(("ascii", "内置函数"), 甲.条目)
-        # 模拟用户在大纲里删掉 ascii 那一行（时间戳要变）
+        self.assertIn(("breakpoint", "内置函数"), 甲.条目)
+        # 模拟用户在大纲里删掉 breakpoint 那一行（时间戳要变）
         time.sleep(0.02)
         保留 = open(路径, encoding="utf-8").read().splitlines()
         open(路径, "w", encoding="utf-8").write(
-            "\n".join(l for l in 保留 if not l.startswith("ascii")) + "\n"
+            "\n".join(l for l in 保留 if not l.startswith("breakpoint")) + "\n"
         )
         乙 = 内核.取报告(路径)
         self.assertIs(甲, 乙, "同一路径仍然必须是同一个实例")
-        self.assertNotIn(("ascii", "内置函数"), 乙.条目, "用户删掉的记录必须真的消失")
-        self.assertIn(("bytearray", "内置函数"), 乙.条目)
+        self.assertNotIn(("breakpoint", "内置函数"), 乙.条目, "用户删掉的记录必须真的消失")
+        self.assertIn(("__import__", "内置函数"), 乙.条目)
         # 新记录照常能写进去
-        乙.记录("memoryview", "内置函数", "b.xht", 1, 1)
+        乙.记录("format_map", "方法", "b.xht", 1, 1)
         乙.保存()
         复核 = 内核.未定义报告(路径)
-        self.assertNotIn(("ascii", "内置函数"), 复核.条目, "保存之后也不能复活")
-        self.assertIn(("memoryview", "内置函数"), 复核.条目)
+        self.assertNotIn(("breakpoint", "内置函数"), 复核.条目, "保存之后也不能复活")
+        self.assertIn(("format_map", "方法"), 复核.条目)
         shutil.rmtree(目录, ignore_errors=True)
 
     def test_并入快照不重复计数(self):
@@ -291,15 +291,15 @@ class 转译测试(unittest.TestCase):
         已计 = {}
         # 第一轮：缓冲里只有一行
         甲 = 内核.未定义报告(None)
-        转译("核说（ascii（1））", 甲)
+        转译("核说（breakpoint（1））", 甲)
         已计 = 持久.并入快照(甲, 已计)
-        self.assertEqual(持久.条目[("ascii", "内置函数")]["次数"], 1)
-        # 第二轮：缓冲变成两行，整份重译 —— ascii 还是只出现 1 次
+        self.assertEqual(持久.条目[("breakpoint", "内置函数")]["次数"], 1)
+        # 第二轮：缓冲变成两行，整份重译 —— breakpoint 还是只出现 1 次
         乙 = 内核.未定义报告(None)
-        转译("核说（ascii（1））\n核说（ascii（2））", 乙)
+        转译("核说（breakpoint（1））\n核说（breakpoint（2））", 乙)
         已计 = 持久.并入快照(乙, 已计)
         self.assertEqual(
-            持久.条目[("ascii", "内置函数")]["次数"], 2,
+            持久.条目[("breakpoint", "内置函数")]["次数"], 2,
             "重译整份缓冲不能把上一轮的计数再加一遍",
         )
 
@@ -388,27 +388,27 @@ class 运行测试(unittest.TestCase):
     def test_未定义清单累积(self):
         路径 = os.path.join(self.目录, "程序.xht")
         with open(路径, "w", encoding="utf-8") as f:
-            f.write('核说（ascii（1））\n核说（"x".casefold（））\n')
+            f.write('核说（breakpoint（1））\n核说（"x".format_map（））\n')
         for _ in range(2):
             subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
         清单 = os.path.join(self.目录, "未定义.txt")
         self.assertTrue(os.path.exists(清单))
         with open(清单, encoding="utf-8") as f:
             内容 = f.read()
-        self.assertIn("ascii\t内置函数\t2", 内容)
-        self.assertIn("casefold\t方法\t2", 内容)
+        self.assertIn("breakpoint\t内置函数\t2", 内容)
+        self.assertIn("format_map\t方法\t2", 内容)
 
     def test_未定义次数按真实出现计(self):
         # 同一个文件里出现两次，次数应为 2（而不是只记一次）
         路径 = os.path.join(self.目录, "多处.xht")
         with open(路径, "w", encoding="utf-8") as f:
-            f.write('核说（ascii（1））\n核说（ascii（2））\n')
+            f.write('核说（breakpoint（1））\n核说（breakpoint（2））\n')
         subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
         清单 = os.path.join(self.目录, "未定义.txt")
         with open(清单, encoding="utf-8") as f:
             内容 = f.read()
-        行 = [x for x in 内容.splitlines() if x.startswith("ascii\t")]
-        self.assertTrue(行, msg="清单里应有 ascii 记录：\n%s" % 内容)
+        行 = [x for x in 内容.splitlines() if x.startswith("breakpoint\t")]
+        self.assertTrue(行, msg="清单里应有 breakpoint 记录：\n%s" % 内容)
         次数 = 行[0].split("\t")[2]
         self.assertEqual(次数, "2", msg=行[0])
 
