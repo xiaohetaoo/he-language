@@ -365,7 +365,9 @@ QSplitter::handle:hover { background: __强调__; }
 #输入框 {
     background: __编辑器__; color: __文本__;
     border: 1px solid __边框__; border-radius: 6px;
-    padding: 5px 10px;
+    /* 与通用 QLineEdit 的 6px 10px 保持一致：查找/快速打开/跳转 三个对话框里
+       的输入框和设置窗口里的目录框应该一样高，差 1px 看不出但并排时能察觉。 */
+    padding: 6px 10px;
     selection-background-color: __选区__;
 }
 #输入框:focus { border: 1px solid __强调__; }
