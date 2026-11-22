@@ -1,0 +1,736 @@
+# -*- coding: utf-8 -*-
+"""核工坊的主题系统 —— 全部配色与控件样式的唯一来源。
+
+设计：一个主题 = 一份色表 + 一份 QSS 模板。
+换主题只需换「色表」，QSS 用字符串替换生成，不用逐个控件改色。
+这是相比 tkinter 版最大的维护性提升（原来要改 101 处）。
+
+新增主题只要往 `主题集` 里加一份色表即可。
+"""
+
+# ---------------------------------------------------------------------------
+# 深色（PyCharm 2024 Darcula 真实取值）
+# ---------------------------------------------------------------------------
+
+深色 = {
+    "名": "深色",
+    # 三档层次：编辑器最暗、面板中间、浮层最亮
+    "编辑器": "#1E1F22",
+    "面板": "#2B2D30",
+    "浮层": "#313438",
+    "窗口": "#2B2D30",
+    "边框": "#393B40",
+    "分隔线": "#393B40",
+    # 文字
+    "文本": "#DFE1E5",
+    "次要文本": "#B2B6BE",
+    "禁用文本": "#6F737A",
+    # 编辑器元素
+    "行号底": "#1E1F22",
+    "行号字": "#9AA0AB",
+    # 当前行高亮。原 #22252A 在编辑器底 #1E1F22 上仅 1.18:1，
+    # 和缩进线一样淡、形同虚设（实测）。提到 1.6:1 左右（P2-23）。
+    #
+    # 目标区间 1.6–2.0：低于 1.6 肉眼几乎看不出「光标在哪一行」，
+    # 高于 2.0 又会在深色底上糊成一块灰，和选区（#2E436E）抢注意力。
+    # 现在的 #42464E = 1.74:1。
+    "当前行": "#42464E",
+    "选区": "#2E436E",
+    "光标": "#DFE1E5",
+    # 缩进参考线：同样是「要能看见但别抢戏」，取 1.69:1（#40444C）。
+    "缩进线": "#40444C",
+    # 语法高亮
+    "注释": "#9197A0",
+    "字符串": "#6AAB73",
+    "数字": "#2AACB8",
+    "关键字": "#CF8E6D",
+    "内置": "#D5B778",
+    "函数名": "#56A8F5",
+    # 异常类型名（核异常 权限错误： 里的那个名字）。
+    # 异常表 34 个中文名一直没进高亮词集，写出来是不上色的普通字。
+    # 用紫色：与关键字的橙、内置的黄、函数名的蓝都能一眼分开。
+    # 对比度 #B58EF8 on #1E1F22 = 6.43:1。
+    "异常名": "#B58EF8",
+    # 库名（核数学库 / 核正弦 这些标准库词汇）。
+    # 0.1.9 加的 模块表 与 库成员表 一直没进高亮词集，写出来全是无色。
+    # 用青绿：与关键字的橙、内置的黄、函数名的蓝、异常名的紫都能一眼分开。
+    "库名": "#4DBFA0",
+    # 交互
+    "强调": "#3574F0",
+    # 实心按钮/菜单选中项：底色要比「强调」再深一点，白字才能到 4.5
+    "按钮底": "#2F6AE0",
+    "按钮热": "#3570E4",
+    "悬停": "#393B40",
+    "按下": "#43454A",
+    "选中行": "#2E436E",
+    # 选中行的字号：以前 QSS 里写死 #FFFFFF —— 深色底(#2E436E)上没问题，
+    # 浅色底(#D5E5FF)上白字对比度只有 1.1:1，几乎是「看不见」（实测截图）。
+    # 所以按主题分：深色用亮字，浅色用深字。
+    "选中行字": "#DFE1E5",
+    "错误": "#FF6B7A",
+    "警告": "#D5B778",
+    "成功": "#6AAB73",
+    "关闭红": "#C42B1C",
+    # 图标：每个功能一个颜色。这里的取值都验算过，
+    # 保证在各自的底色（窗口/悬停）上对比度 ≥ 3.0（WCAG 非文本对比）。
+    "图标项目": "#6C9EF8",
+    "图标结构": "#B58EF8",
+    "图标运行": "#4CAF6E",
+    "图标设置": "#9AA0AB",
+    "图标状态点": "#6AAB73",
+    # 控制台
+    "控制台底": "#1E1F22",
+    "控制台字": "#BCBEC4",
+    # 版本控制面板的 diff 预览：增行 / 删行 的底色与字色。
+    # 底色刻意很淡（在 darcula 的 #1E1F22 上几乎只是「泛一点绿/红」），
+    # 因为整屏都是色块会盖过代码本身；靠左边的 +/− 符号和淡底色一起区分。
+    "diff增底": "#243A2B",
+    "diff删底": "#3D2528",
+    "diff增字": "#8FD4A0",
+    "diff删字": "#F09AA5",
+    "diff头字": "#7FB3F0",
+}
+
+# ---------------------------------------------------------------------------
+# 浅色（PyCharm Light）
+# ---------------------------------------------------------------------------
+
+浅色 = {
+    "名": "浅色",
+    "编辑器": "#FFFFFF",
+    "面板": "#F7F8FA",
+    "浮层": "#EDEFF2",
+    "窗口": "#F7F8FA",
+    "边框": "#D6DAE0",
+    "分隔线": "#D6DAE0",
+    "文本": "#1F2329",
+    "次要文本": "#5F6672",
+    "禁用文本": "#9AA0A8",
+    "行号底": "#F7F8FA",
+    "行号字": "#676D76",
+    # 原 #F2F6FC 在 #FFFFFF 上仅 1.04:1（几乎看不出来）。
+    # 现在 当前行 #BFCBE4 = 1.63:1、缩进线 #B9C6E1 = 1.72:1 ——
+    # 浅色底上必须比深色底更重一点才看得见（P2-23）。
+    "当前行": "#BFCBE4",
+    "选区": "#CFE2FF",
+    "光标": "#1F2329",
+    "缩进线": "#B9C6E1",
+    "注释": "#6D737B",
+    "字符串": "#067D17",
+    "数字": "#1750EB",
+    "关键字": "#8F4E00",
+    "内置": "#8A6D00",
+    "函数名": "#005FAB",
+    # 对比度 #7B4FD0 on #FFFFFF = 5.42:1
+    "异常名": "#7B4FD0",
+    # 库名：浅色底上用深青绿，与深色那支同一个色相。
+    "库名": "#0F7A63",
+    "强调": "#3574F0",
+    "按钮底": "#2F6AE0",
+    "按钮热": "#3570E4",
+    "悬停": "#E6E9ED",
+    "按下": "#D8DCE2",
+    "选中行": "#D5E5FF",
+    # 浅蓝底配深字：与 #D5E5FF 的对比度约 12:1（白字只有 1.1:1）
+    "选中行字": "#1F2329",
+    "错误": "#C7221F",
+    "警告": "#8A6D00",
+    "成功": "#067D17",
+    "关闭红": "#C42B1C",
+    # 图标：浅色底上必须用更深的同色系，否则亮蓝亮绿会糊在白底上
+    "图标项目": "#2F6FD0",
+    "图标结构": "#7B4FD0",
+    "图标运行": "#2E8B57",
+    "图标设置": "#5F6672",
+    "图标状态点": "#067D17",
+    "控制台底": "#FFFFFF",
+    "控制台字": "#3A3F45",
+    # diff 增/删行。浅色底上要比深色主题更实一点，
+    # 否则白底上的淡绿淡红基本看不出来。
+    "diff增底": "#E6F5EA",
+    "diff删底": "#FBE9EC",
+    # 原 #1A7F37 压在增行底 #E6F5EA 上正好 4.50:1 —— 卡在 WCAG 正文
+    # 阈值线上，没有余量（不同显示器的 gamma 一偏就读不清）。
+    # 加深一档到 5.48:1。
+    "diff增字": "#17702F",
+    "diff删字": "#B4232C",
+    "diff头字": "#2F6FD0",
+}
+
+主题集 = {"深色": 深色, "浅色": 浅色}
+
+#: 等宽字体候选（按优先级）—— **唯一来源**。
+#: 编辑器、版本控制面板的 diff 预览、自检都必须读这里。
+#: 以前 版本控制窗口.py 自己写了一份，且多塞了 DejaVu Sans Mono、少了
+#: JetBrains Mono：同一台机器上「编辑器用 Cascadia、diff 用 DejaVu」，
+#: 两个面板的行高对不齐，看起来像 diff 没对齐。
+等宽候选 = ("Cascadia Mono", "JetBrains Mono", "Consolas", "Courier New")
+#: 界面字体
+界面字体 = "Microsoft YaHei UI"
+
+#: 编辑器字号范围与步长 —— **唯一来源**。
+#: 主窗、设置窗口、自检都必须读这里，别再各写一份 min/max：
+#: 以前三处各写各的（9~22 / 9~23 / 8~28），改一处就会出现
+#: 「设置里能调到 22、按 +/- 只能到 22、配置里却存了 26」这种不一致。
+字号最小 = 8
+字号最大 = 40
+字号步长 = 1
+
+# ---------------------------------------------------------------------------
+# 布局尺寸 —— **统一口径**
+# ---------------------------------------------------------------------------
+# 以前这些数字散落在各处的 setContentsMargins / setFixedHeight 里，
+# 一共 7 种内边距、6 种间距、5 种固定高度。后果不是报错，而是**看起来不齐**：
+# 项目树头的文字从 x=10 起、运行窗头的标题从 x=14 起、状态栏又从 x=14 起，
+# 三个面板的左边线对不齐，眼睛会明显觉得「左边缘是歪的」。
+#
+# 现在按「一套 4 的倍数」收敛：
+#   边距 4 / 8 / 12 / 16，间距 4 / 6 / 8，高度 26 / 30 / 32 / 44
+# 下面的常量是各处应当引用的**唯一来源**，不要再写字面量。
+
+#: 面板/行内容的标准左右内边距（顶行、面板头、状态栏、运行窗头都用它）
+内边距 = 12
+#: 竖向紧凑内边距（面板头的上下、输入行上下）
+内边距_竖 = 4
+#: 控件之间的标准间距
+间距 = 8
+#: 图标/文字紧邻时的紧凑间距
+间距_紧 = 4
+#: 分栏面板之间的间距（标题与内容之间那种「一段留白」）
+间距_段 = 12
+
+#: 顶行高度（无边框窗口的自绘标题栏）
+高_顶行 = 44
+#: 面板头高度。项目树 / 语法对照表 / 运行窗口三个面板**共用一个值** ——
+#: 它们横向并排，高度不一致会让人一眼看出「有一个是歪的」。
+#: 0.2.7 之前运行窗头单独用了 30（其余 32），并排时差 2px。
+高_面板头 = 32
+#: 状态栏 / 面包屑高度
+高_状态栏 = 26
+#: 运行窗底部输入行高度
+高_输入行 = 36
+
+
+
+def 夹字号(字号):
+    """把任意字号夹到允许范围内（并取整）。"""
+    try:
+        n = int(round(float(字号)))
+    except (TypeError, ValueError):
+        return 12
+    return max(字号最小, min(字号最大, n))
+
+
+# ---------------------------------------------------------------------------
+# QSS 模板 —— 所有控件的样式都集中在这里
+# ---------------------------------------------------------------------------
+
+_QSS = """
+/* 基础 */
+QWidget {
+    background: __窗口__;
+    color: __文本__;
+    font-family: "__界面字体__";
+    font-size: 13px;
+}
+/* 编辑器字号来自设置里的「字号」。
+   QSS 的 font-size 优先级高于 setFont()，原来这里写死 13px，
+   于是 编辑器.设置字体() 里设的 QPointSize 被完全覆盖 ——
+   用户改字号什么都没发生（实测 QFont.pointSize() 恒为 -1、
+   fontMetrics 高度恒为 16）。用 __字号__ 占位符把设置接进来。 */
+QPlainTextEdit, QTextEdit {
+    font-family: "__等宽字体__";
+    font-size: __字号__px;
+}
+/* 行号栏自己也是 QWidget 子类，会被上面 QWidget 的 font-size:13px 覆盖，
+   导致正文字号变了、行号数字却不变（看起来像行号突然变小）。
+   这里显式给它同样的字号与等宽字体。 */
+#gutter {
+    font-family: "__等宽字体__";
+    font-size: __字号__px;
+}
+QMainWindow { background: __窗口__; }
+QToolTip {
+    background: __浮层__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px; padding: 5px 8px;
+}
+
+/* 外框（圆角无边框窗口）。
+   最大化时必须把圆角去掉：#rootFrame 的四角会被切掉一小块，
+   屏幕四角因此露出桌面/阴影，看起来就像「全屏没占满」。
+   主窗._应用窗口外观() 通过设置 maximized 属性切换下面这条规则。
+
+   注意：属性名不能叫 maximized —— 那是 QWidget 的内建只读属性，
+   setProperty("maximized", ...) 会被直接吞掉（读回来永远是 False，
+   dynamicPropertyNames 里也看不到），这条规则就永远不会匹配。
+   用 窗态 这个名字，中文名不会被内建属性占用。 */
+#rootFrame {
+    background: __窗口__;
+    border: 1px solid __边框__;
+    border-radius: 12px;
+}
+#rootFrame[窗态="最大化"] {
+    border-radius: 0px;
+}
+
+/* 顶行（#topRow）。
+   原先这里还有 #titleBar / #titleText / #toolBar 三条规则，0.2.7 删除：
+   它们是「独立标题栏 + 独立工具条」布局留下的对象名。Qt 新 UI 已经把
+   菜单、项目名、搜索框合并进 #topRow，代码里再没有这些 objectName
+   的控件 —— 留着是纯死规则，还会误导后来者以为有个 titleBar 可调。 */
+#brandMark { background: transparent; }
+#menuBtn {
+    color: __次要文本__; font-size: 15px;
+    padding: 4px 10px; border-radius: 6px; background: transparent;
+}
+#menuBtn:hover { background: __悬停__; color: __文本__; }
+
+/* 品牌字样（标志旁边那个「核工坊」） */
+#品牌字 {
+    color: __文本__; font-size: 14px; font-weight: bold;
+    background: transparent; padding: 2px 4px; border-radius: 6px;
+}
+#品牌字:hover { background: __悬停__; }
+
+/* 窗口按钮。
+   objectName 必须和代码里一致：窗口钮 / 关闭钮。
+   以前这里写的是 #winBtn / #closeBtn，和代码对不上，于是三个窗口按钮
+   一条样式都没套上 —— 没有悬停反馈、关闭钮也不会变红。 */
+#窗口钮 {
+    color: __次要文本__; font-size: 13px;
+    background: transparent; padding: 0px;
+}
+#窗口钮:hover { background: __悬停__; color: __文本__; }
+#关闭钮 { color: __次要文本__; background: transparent; }
+#关闭钮:hover { background: __关闭红__; color: #FFFFFF; }
+
+/* 搜索框 */
+#searchBox {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px;
+    padding: 5px 10px; font-size: 12px;
+    selection-background-color: __选区__;
+}
+#searchBox:focus { border: 1px solid __强调__; }
+
+#toolBtn {
+    color: __文本__; background: transparent;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px;
+}
+#toolBtn:hover { background: __悬停__; }
+#toolBtn:pressed { background: __按下__; }
+#crumb { color: __次要文本__; font-size: 12px; background: transparent; }
+
+/* 分栏 */
+/* 可拖动分割条。
+ *
+ * 以前 width/height 都是 1px（P2-20）：视觉上是一条线，**可拖动区域也只有
+ * 1 像素宽** —— 用户基本不可能精准点中，面板宽度实际上调不动。
+ * Qt 里 handle 的宽高就是可命中区域，所以它必须够大；想让「看起来细」
+ * 就靠颜色与背景对比，不要拿命中区域去换。
+ * 6px 是能稳定拖住的最小值（实测 4px 仍偶有落空）。
+ */
+QSplitter::handle { background: __分隔线__; }
+QSplitter::handle:horizontal { width: 6px; }
+QSplitter::handle:vertical { height: 6px; }
+QSplitter::handle:hover { background: __强调__; }
+QSplitter::handle:pressed { background: __强调__; }
+
+/* 面板头 */
+#panelHeader {
+    background: __窗口__; color: __次要文本__;
+    font-size: 12px; border-bottom: 1px solid __边框__;
+}
+/* 侧边面板容器（项目树所在的那一列、设置窗口左侧分类栏）。
+   代码里有两处 setObjectName("sidePanel")，但 QSS 一直没有对应规则 ——
+   它落到全局 QWidget 的 __窗口__ 底上，于是项目树区域
+   （#panelHeader 之上、QTreeWidget 之外的那圈留白）是窗口色，
+   和面板应有的 __面板__ 色差一档，看起来像「项目树没铺满」。
+   这里给它明确的底色。 */
+#sidePanel { background: __面板__; }
+
+/* 语法对照表正文。
+   代码里 setObjectName("refTable")，QSS 里一直没有规则 ——
+   于是它拿到 QPlainTextEdit 的通用样式：__编辑器__ 底（比面板暗一档）、
+   编辑器的 __字号__、以及 6px 竖内边距。对照表是**只读参考**，
+   和运行窗控制台一样属于面板内容，应该用面板底 + 固定小字号，
+   不该跟着编辑器字号一起放大（放大到 40 时对照表一屏只能看几行）。 */
+#refTable {
+    background: __面板__; color: __文本__;
+    /* 对照表是「%-12s = %s」这种按列对齐拼出来的文本，
+       必须用等宽字体才对齐 —— 用界面字体会让中英混排的等号列参差不齐。 */
+    font-family: "__等宽字体__";
+    font-size: 12px;
+    border: none; padding: 6px 8px;
+    selection-background-color: __选区__;
+}
+
+/* 状态栏左侧两段文字。
+   代码里 #statusLeft / #statusRight 都在用，QSS 只定义了它俩，
+   但状态栏里还有「项目名」那一段用的是 #statusLeft —— 已覆盖。
+   这里补充：左侧文字自动省略（过长时显示 …），
+   否则一条带完整路径的提示会把右侧的行列/编码信息顶出窗口。 */
+#statusLeft {
+    color: __次要文本__; font-size: 11px; background: transparent;
+}
+
+/* 查找/快速打开对话框里的输入框。
+   代码里 setObjectName("输入框")，QSS 没有这条规则 ——
+   它只拿到通用 QLineEdit 样式，和顶行搜索框(#searchBox)的
+   圆角/内边距/聚焦边框颜色不完全一致。统一成同一套观感。 */
+#输入框 {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px;
+    /* 与通用 QLineEdit 的 6px 10px 保持一致：查找/快速打开/跳转 三个对话框里
+       的输入框和设置窗口里的目录框应该一样高，差 1px 看不出但并排时能察觉。 */
+    padding: 6px 10px;
+    selection-background-color: __选区__;
+}
+#输入框:focus { border: 1px solid __强调__; }
+
+/* 项目树 */
+QTreeWidget {
+    background: __面板__; color: __文本__;
+    border: none; outline: none; font-size: 13px;
+}
+QTreeWidget::item { height: 24px; padding-left: 2px; }
+QTreeWidget::item:hover { background: __悬停__; }
+QTreeWidget::item:selected { background: __选中行__; color: __选中行字__; }
+/* 分支指示器（展开/收起的三角）。
+ *
+ * **不能对所有分支写 background: transparent**（P2-19）。
+ * Qt 里 `::branch` 的子控件一旦被 QSS 命中，整个子控件就交给 QSS 画 ——
+ * 写了 background 就把「三角」也一起吃掉，只铺一块背景色。
+ * 结果：项目树里所有文件夹看起来都没有展开箭头，用户只能靠双击。
+ *
+ * 折中：**只对叶子行**（没有子项）透明 —— 那些行本来就没有三角，
+ * 只是不想让样式给它们铺一块亮色底；有子项的行完全交给样式画，
+ * 三角和背景都由样式负责，主题配色仍由上面的 QTreeWidget 规则兜底。
+ */
+QTreeWidget::branch:!has-children { background: transparent; }
+
+/* 标签栏 */
+#tabBar { background: __窗口__; }
+QTabBar::tab {
+    background: __面板__; color: __次要文本__;
+    padding: 8px 18px; margin-right: 2px;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+    font-size: 13px;
+}
+QTabBar::tab:selected {
+    background: __编辑器__; color: __文本__;
+    border-bottom: 2px solid __强调__;
+}
+QTabBar::tab:hover:!selected { background: __悬停__; color: __文本__; }
+QTabBar::close-button {
+    /* 这里曾经写的是 `image: none`，本意是「别用 Qt 的默认关闭图标」，
+       实际效果是把关闭按钮整个清空 —— 代码里 setTabsClosable(True) 打开，
+       但用户界面上根本看不到那个 ✕，只能靠右键菜单或 Ctrl+W 关标签。
+       Qt 的 QTabBar::close-button 只能用图片，QSS 不认 CSS 那种
+       用文字/边框拼出来的「×」。所以这里给一张内嵌的 SVG：
+       用 data: URI 写进去，单文件打包后不会因为相对路径失效
+       （这正是当初改成 image:none 的原因，换个手段解决即可）。
+       颜色用浅灰（#9AA0AB），深浅两套主题下都能看清。 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%239AA0AB' stroke-width='1.4' stroke-linecap='round'/></svg>");
+    subcontrol-position: right;
+    width: 10px; height: 10px;
+    margin-right: 6px;
+}
+QTabBar::close-button:hover {
+    /* 悬停时换成偏红的深色，提示「点这里会关掉」 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%23C75450' stroke-width='1.6' stroke-linecap='round'/></svg>");
+}
+
+/* 编辑器 */
+QPlainTextEdit, QTextEdit {
+    background: __编辑器__; color: __文本__;
+    /* padding 的左右必须是 0：行号栏的宽度由 setViewportMargins 精确预留，
+       这里再给左右 padding 会把文字又往里推（或覆盖掉视口左边距，
+       导致文字贴到最左边、和行号重叠，看起来就像每行开头被切掉了）。 */
+    border: none; padding: 6px 0px;
+    selection-background-color: __选区__; selection-color: __文本__;
+}
+/* 控制台 / 版本历史这类「输出视图」用**固定字号**（P2-24）。
+ *
+ * 上面那条 QPlainTextEdit 规则用的是 __字号__px（跟编辑器字号走）。
+ * 编辑器字号可以拉到 40，但控制台是日志：40px 一行只放得下二十来个字，
+ * 运行输出立刻横向溢出；版本历史更糟 —— 日期和提交信息被裁掉一半。
+ * 这里固定 13px，并且允许换行，和编辑器字号解耦。
+ */
+QPlainTextEdit#console, QTextEdit#console,
+QPlainTextEdit#版本历史, QTextEdit#版本历史 {
+    background: __控制台底__; color: __控制台字__;
+    selection-background-color: __选区__;
+    font-size: 13px;
+}
+QPlainTextEdit#console, QTextEdit#console {
+    /* 控制台保留等宽字体：运行输出里的对齐（表格、缩进）靠它 */
+    font-family: "__等宽字体__";
+}
+QPlainTextEdit#版本历史, QTextEdit#版本历史 {
+    /* 这里不写 word-wrap：QSS 没有这个属性，写了 Qt 会打印
+       「Unknown property word-wrap」并且完全不生效。
+       换行由控件自己控制（QPlainTextEdit.setLineWrapMode）。 */
+    selection-color: __文本__;
+}
+
+/* 滚动条
+   槽色必须显式给：以前写 transparent，滚动条槽就露出父控件的底色 ——
+   编辑器(#1E1F22)与对照表/控制台面板(#2B2D30)落差明显，深色下
+   编辑器右缘会多出一条浅竖带（实测截图）。现在统一用 __编辑器__。 */
+QScrollBar:vertical {
+    background: __编辑器__; width: 12px; margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: __悬停__; border-radius: 6px; min-height: 30px; margin: 2px;
+}
+QScrollBar::handle:vertical:hover { background: __按下__; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal {
+    background: __编辑器__; height: 12px; margin: 0px;
+}
+QScrollBar::handle:horizontal {
+    background: __悬停__; border-radius: 6px; min-width: 30px; margin: 2px;
+}
+QScrollBar::handle:horizontal:hover { background: __按下__; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+
+/* 运行窗口 */
+#runHeader { background: __面板__; border-top: 1px solid __边框__; }
+#runTitle { color: __文本__; font-size: 12px; background: transparent; }
+#runStatus { color: __次要文本__; font-size: 12px; background: transparent; }
+#inputBox {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px;
+}
+#inputBox:focus { border: 1px solid __强调__; }
+
+/* 左侧竖条 */
+#leftRail {
+    background: __窗口__; border-right: 1px solid __边框__;
+}
+#railBtn {
+    color: __次要文本__; background: transparent;
+    font-size: 16px; border-radius: 8px;
+}
+#railBtn:hover { background: __悬停__; color: __文本__; }
+#railBtn:checked { background: __悬停__; color: __强调__; }
+
+/* 顶部单行（新 UI 合并式） */
+#topRow { background: __窗口__; border-bottom: 1px solid __边框__; }
+#projectName { color: __文本__; font-size: 13px; background: transparent; }
+#topBtn {
+    color: __文本__; background: transparent;
+    padding: 5px 10px; border-radius: 6px; font-size: 13px;
+}
+#topBtn:hover { background: __悬停__; color: __文本__; }
+#runBtn {
+    color: __成功__; background: transparent;
+    padding: 4px 8px; border-radius: 6px; font-size: 15px;
+}
+#runBtn:hover { background: __悬停__; }
+
+/* 状态栏 */
+#statusBar { background: __面板__; border-top: 1px solid __边框__; }
+#statusLeft, #statusRight { color: __次要文本__; font-size: 11px; background: transparent; }
+
+/* 菜单 */
+QMenu {
+    background: __浮层__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 8px; padding: 6px;
+}
+QMenu::item { padding: 7px 28px 7px 18px; border-radius: 5px; }
+QMenu::item:selected { background: __按钮底__; color: #FFFFFF; }
+QMenu::separator { height: 1px; background: __边框__; margin: 5px 10px; }
+
+/* 对话框 */
+QDialog { background: __窗口__; }
+QLineEdit {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px; padding: 6px 10px;
+}
+QLineEdit:focus { border: 1px solid __强调__; }
+QPushButton {
+    background: __悬停__; color: __文本__;
+    border: none; border-radius: 6px; padding: 7px 18px; font-size: 13px;
+}
+QPushButton:hover { background: __按下__; }
+/* 主按钮（确定 / 运行 等）。
+   用自定义属性 primary="true" 而不是 :default —— Qt 会在对话框显示时
+   把「默认按钮」偷偷转给焦点链里第一个 autoDefault 的按钮，
+   :default 因此会飘到不相关的按钮上（实测「更改…」变成蓝色，
+   按回车还会弹文件选择框而不是确认）。属性由我们自己控制，不会被抢。 */
+QPushButton[primary="true"] {
+    background: __按钮底__; color: #FFFFFF;
+}
+QPushButton[primary="true"]:hover { background: __按钮热__; }
+QPushButton:default { background: __按钮底__; color: #FFFFFF; }
+QPushButton:default:hover { background: __按钮热__; }
+QCheckBox { color: __文本__; spacing: 8px; background: transparent; }
+/* 指示器由 _控件样式 自绘（见 核工坊Qt）：QSS 一旦写 ::indicator 的
+   background，就把整个子控件接管了，而对勾是 QSS 画不出来的东西 ——
+   选中态会退化成一块纯色方块，和未选中态只靠颜色区分（P2-24）。 */
+QComboBox {
+    background: __编辑器__; color: __文本__;
+    border: 1px solid __边框__; border-radius: 6px; padding: 5px 10px;
+}
+/* 下拉箭头区。不写这两条的话，Qt 会用 Fusion 样式的默认值：
+   箭头那边带一块更亮的底 + 一条竖分隔线，在深色主题上很扎眼。 */
+QComboBox::drop-down {
+    subcontrol-origin: padding; subcontrol-position: center right;
+    width: 20px; border: none; background: transparent;
+}
+/* 箭头由程序自绘（见 核工坊Qt.带箭头下拉框）。
+   Qt 的 QSS 不支持 CSS 的「边框拼三角形」写法，写了会渲染成一个实心方块；
+   而图片在单文件打包后相对路径容易失效。自绘最稳。 */
+QComboBox::down-arrow { width: 0px; height: 0px; image: none; }
+QComboBox QAbstractItemView {
+    background: __浮层__; color: __文本__;
+    border: 1px solid __边框__; selection-background-color: __强调__;
+}
+QListWidget {
+    background: __面板__; color: __文本__; border: none; outline: none;
+}
+QListWidget::item { padding: 9px 14px; border-radius: 6px; }
+QListWidget::item:selected { background: __选中行__; color: __选中行字__; }
+QListWidget::item:hover:!selected { background: __悬停__; }
+QGroupBox { color: __文本__; border: none; margin-top: 8px; }
+QLabel { background: transparent; }
+
+/* 设置窗口内部用的几个文字角色。
+   以前这些控件的颜色是靠 setStyleSheet(f"color: {主题[文本]}") 行内写死的，
+   换主题时不会更新 —— 从深色切到浅色后，标题会保持深色主题的浅灰，
+   在浅底上几乎看不见（实测「外观 / 配色 / 编辑器字号」全糊成一片）。
+   改走 QSS 之后，换主题重生成样式表就自动跟着变。 */
+#pageTitle { color: __文本__; font-size: 17px; font-weight: bold; background: transparent; }
+#groupTitle { color: __文本__; font-weight: bold; background: transparent; }
+#hintText  { color: __次要文本__; font-size: 11px; background: transparent; }
+/* 欢迎页那张大字标题（「核语言」）。
+   以前是代码里行内 setStyleSheet("font-size: 30px; …")，
+   既不会被换主题重生成，也不随字号设置缩放 —— 走 QSS 才和其余界面一致。 */
+#welcomeTitle {
+    color: __文本__; font-size: 30px; font-weight: bold; background: transparent;
+}
+#sliderValue { color: __文本__; font-weight: bold; background: transparent; }
+#aboutTitle { color: __文本__; font-size: 15px; font-weight: bold; background: transparent; }
+#linkLabel  { color: __强调__; background: transparent; }
+/* 版本控制面板里的 diff 预览。
+   diff 是「只读的代码」，所以走编辑器的底色与等宽字体，
+   再加一条左边框把它和上面的文件列表分开。
+
+   **字号必须自己钉死**（P1-5）。QPlainTextEdit 的通用规则用的是
+   `__字号__px`（跟着编辑器字号走）；这里只写 font-family 不写字号，
+   就会继承那条通用规则：编辑器拉到 40px 时，diff 里「选中上面的文件，
+   这里显示它的差异」这行占位文字变成巨型字、被裁掉一半，
+   而上面的文件列表还是 13px —— 同一个面板上下完全不成比例。
+   diff 是输出视图，不是编辑区，和 控制台 / 版本历史 一样固定 13px。 */
+#diffView {
+    background: __编辑器__;
+    color: __次要文本__;
+    border: 1px solid __边框__;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: "__等宽字体__";
+    font-size: 13px;
+}
+QTabWidget::pane { border: none; background: __窗口__; }
+
+/* 滑动条（设置里的字号）。
+   Qt 的 QSlider 子控件尺寸规则很别扭：
+     · handle 的高度 = groove 高度 + 2*|margin|，写负 margin 会把
+       手柄拉成竖椭圆（实测 14x22，像颗胶囊而不是圆钮）；
+     · 但 groove 高度太小（4px）时手柄根本没有画圆的空间。
+   解法：把 groove 做到 16px 高（给手柄正方形空间），再用竖直渐变
+   让「可见的轨道」只占中间那 4px —— 上下各 37.5% 都是透明的。 */
+QSlider { min-height: 24px; }
+QSlider::groove:horizontal {
+    height: 16px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0    transparent,
+        stop:0.37 transparent,
+        stop:0.38 __边框__,
+        stop:0.62 __边框__,
+        stop:0.63 transparent,
+        stop:1    transparent);
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0    transparent,
+        stop:0.37 transparent,
+        stop:0.38 __强调__,
+        stop:0.62 __强调__,
+        stop:0.63 transparent,
+        stop:1    transparent);
+}
+QSlider::add-page:horizontal { background: transparent; }
+/* 圆钮：内容 8px + 边框 3px*2 = 14px 见方，半径 7 → 正圆。
+   margin 归零，让高度等于 groove 的 16px 减去自身，不再被撑长。 */
+QSlider::handle:horizontal {
+    background: __强调__;
+    border: 3px solid __编辑器__;
+    width: 8px;
+    height: 8px;
+    margin: 1px 0px;
+    border-radius: 7px;
+}
+QSlider::handle:horizontal:hover { background: __按钮热__; }
+QSlider::handle:horizontal:pressed { background: __按钮热__; }
+QSlider::tick:horizontal { background: transparent; }
+"""
+
+
+def 生成样式(主题=None, 字号=12, 等宽=None):
+    """把色表套进 QSS 模板，返回可直接 setStyleSheet 的字符串。
+
+    QSS 里全是 CSS 的 `{}`，直接用 str.format 会冲突，
+    所以模板里用的是 `__键名__` 占位符，这里用 replace 填充。
+
+    `字号` 同时决定编辑器字号（QSS 的 font-size 优先级高于 setFont()，
+    所以必须写进 QSS 才真的生效）。`等宽` 不传就用候选表第一项，
+    真正可用性由调用方（编辑器.挑等宽字体）保证。
+    """
+    主题 = 主题 or 深色
+    数据 = dict(主题)
+    数据["界面字体"] = 界面字体
+    数据["字号"] = str(int(字号))
+    数据["等宽字体"] = 等宽 or 等宽候选[0]
+    文本 = _QSS
+    # 保险：模板里若混进了 `{中文名}` 这种单花括号写法（CSS 的块花括号
+    # 里永远是选择器和声明，绝不会只有纯中文），先统一成 `__中文名__`。
+    # 教训：曾经有 12 处用了 `{窗口}` 这类写法，替换逻辑只认 `__窗口__`，
+    # 于是这些声明原样留在 QSS 里被 Qt 判为非法值而整条丢弃 ——
+    # 顶栏、左侧竖条、运行按钮因此一直没有样式，表现为「图标和文字看不清」。
+    import re as _re0
+
+    文本 = _re0.sub(r"\{([\u4e00-\u9fff]+)\}", r"__\1__", 文本)
+    # 长的键先替换，避免 __窗口__ 被 __窗__ 之类误伤
+    for 键 in sorted(数据, key=len, reverse=True):
+        文本 = 文本.replace("__%s__" % 键, str(数据[键]))
+    # Qt 的 QSS 解析器不认中文注释（会报 "Could not parse stylesheet"），
+    # 所以模板里的注释只在源码里给人看，运行时一律剥掉。
+    import re as _re
+
+    文本 = _re.sub(r"/\*.*?\*/", "", 文本, flags=_re.S)
+    # 兜底校验：不该再有残留占位符。
+    # 注意别把 CSS 的块花括号当占位符 —— 只有「花括号里全是中文」
+    # 或者「还剩 __某某__」才是真的没替换掉。
+    残留 = _re.findall(r"\{[\u4e00-\u9fff]+\}", 文本) + _re.findall(r"__[^_\s{};]+__", 文本)
+    if 残留:
+        raise ValueError("QSS 模板有没被替换的占位符：%r" % 残留[:3])
+    return 文本
+
+
+def 取主题(名, 备用=None):
+    return 主题集.get(名) or 备用 or 深色
+
+
+def 换主题(应用窗口, 主题, 字号=12, 等宽=None):
+    """给整个应用套上主题。一行搞定 —— 这就是维护性的提升。
+
+    注意：务必传 QApplication 实例而不是主窗口，否则对话框等子窗口
+    拿不到样式。若实际传入的是 QWidget，也能工作（样式会向下继承）。
+    """
+    应用窗口.setStyleSheet(生成样式(主题, 字号, 等宽))
