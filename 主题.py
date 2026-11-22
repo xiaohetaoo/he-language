@@ -29,11 +29,16 @@
     "行号底": "#1E1F22",
     "行号字": "#9AA0AB",
     # 当前行高亮。原 #22252A 在编辑器底 #1E1F22 上仅 1.18:1，
-    # 和缩进线一样淡、形同虚设（实测）。提到 1.6:1 左右。
-    "当前行": "#26292E",
+    # 和缩进线一样淡、形同虚设（实测）。提到 1.6:1 左右（P2-23）。
+    #
+    # 目标区间 1.6–2.0：低于 1.6 肉眼几乎看不出「光标在哪一行」，
+    # 高于 2.0 又会在深色底上糊成一块灰，和选区（#2E436E）抢注意力。
+    # 现在的 #42464E = 1.74:1。
+    "当前行": "#42464E",
     "选区": "#2E436E",
     "光标": "#DFE1E5",
-    "缩进线": "#2A2C30",
+    # 缩进参考线：同样是「要能看见但别抢戏」，取 1.69:1（#40444C）。
+    "缩进线": "#40444C",
     # 语法高亮
     "注释": "#9197A0",
     "字符串": "#6AAB73",
@@ -104,10 +109,12 @@
     "行号底": "#F7F8FA",
     "行号字": "#676D76",
     # 原 #F2F6FC 在 #FFFFFF 上仅 1.04:1（几乎看不出来）。
-    "当前行": "#EDF2FC",
+    # 现在 当前行 #BFCBE4 = 1.63:1、缩进线 #B9C6E1 = 1.72:1 ——
+    # 浅色底上必须比深色底更重一点才看得见（P2-23）。
+    "当前行": "#BFCBE4",
     "选区": "#CFE2FF",
     "光标": "#1F2329",
-    "缩进线": "#E8EBEF",
+    "缩进线": "#B9C6E1",
     "注释": "#6D737B",
     "字符串": "#067D17",
     "数字": "#1750EB",
@@ -315,10 +322,19 @@ QToolTip {
 #crumb { color: __次要文本__; font-size: 12px; background: transparent; }
 
 /* 分栏 */
+/* 可拖动分割条。
+ *
+ * 以前 width/height 都是 1px（P2-20）：视觉上是一条线，**可拖动区域也只有
+ * 1 像素宽** —— 用户基本不可能精准点中，面板宽度实际上调不动。
+ * Qt 里 handle 的宽高就是可命中区域，所以它必须够大；想让「看起来细」
+ * 就靠颜色与背景对比，不要拿命中区域去换。
+ * 6px 是能稳定拖住的最小值（实测 4px 仍偶有落空）。
+ */
 QSplitter::handle { background: __分隔线__; }
-QSplitter::handle:horizontal { width: 1px; }
-QSplitter::handle:vertical { height: 1px; }
+QSplitter::handle:horizontal { width: 6px; }
+QSplitter::handle:vertical { height: 6px; }
 QSplitter::handle:hover { background: __强调__; }
+QSplitter::handle:pressed { background: __强调__; }
 
 /* 面板头 */
 #panelHeader {
@@ -380,7 +396,18 @@ QTreeWidget {
 QTreeWidget::item { height: 24px; padding-left: 2px; }
 QTreeWidget::item:hover { background: __悬停__; }
 QTreeWidget::item:selected { background: __选中行__; color: __选中行字__; }
-QTreeWidget::branch { background: transparent; }
+/* 分支指示器（展开/收起的三角）。
+ *
+ * **不能对所有分支写 background: transparent**（P2-19）。
+ * Qt 里 `::branch` 的子控件一旦被 QSS 命中，整个子控件就交给 QSS 画 ——
+ * 写了 background 就把「三角」也一起吃掉，只铺一块背景色。
+ * 结果：项目树里所有文件夹看起来都没有展开箭头，用户只能靠双击。
+ *
+ * 折中：**只对叶子行**（没有子项）透明 —— 那些行本来就没有三角，
+ * 只是不想让样式给它们铺一块亮色底；有子项的行完全交给样式画，
+ * 三角和背景都由样式负责，主题配色仍由上面的 QTreeWidget 规则兜底。
+ */
+QTreeWidget::branch:!has-children { background: transparent; }
 
 /* 标签栏 */
 #tabBar { background: __窗口__; }
@@ -423,9 +450,28 @@ QPlainTextEdit, QTextEdit {
     border: none; padding: 6px 0px;
     selection-background-color: __选区__; selection-color: __文本__;
 }
-QPlainTextEdit#console, QTextEdit#console {
+/* 控制台 / 版本历史这类「输出视图」用**固定字号**（P2-24）。
+ *
+ * 上面那条 QPlainTextEdit 规则用的是 __字号__px（跟编辑器字号走）。
+ * 编辑器字号可以拉到 40，但控制台是日志：40px 一行只放得下二十来个字，
+ * 运行输出立刻横向溢出；版本历史更糟 —— 日期和提交信息被裁掉一半。
+ * 这里固定 13px，并且允许换行，和编辑器字号解耦。
+ */
+QPlainTextEdit#console, QTextEdit#console,
+QPlainTextEdit#版本历史, QTextEdit#版本历史 {
     background: __控制台底__; color: __控制台字__;
     selection-background-color: __选区__;
+    font-size: 13px;
+}
+QPlainTextEdit#console, QTextEdit#console {
+    /* 控制台保留等宽字体：运行输出里的对齐（表格、缩进）靠它 */
+    font-family: "__等宽字体__";
+}
+QPlainTextEdit#版本历史, QTextEdit#版本历史 {
+    /* 这里不写 word-wrap：QSS 没有这个属性，写了 Qt 会打印
+       「Unknown property word-wrap」并且完全不生效。
+       换行由控件自己控制（QPlainTextEdit.setLineWrapMode）。 */
+    selection-color: __文本__;
 }
 
 /* 滚动条
@@ -524,11 +570,9 @@ QPushButton[primary="true"]:hover { background: __按钮热__; }
 QPushButton:default { background: __按钮底__; color: #FFFFFF; }
 QPushButton:default:hover { background: __按钮热__; }
 QCheckBox { color: __文本__; spacing: 8px; background: transparent; }
-QCheckBox::indicator {
-    width: 16px; height: 16px;
-    border: 1px solid __边框__; border-radius: 4px; background: __编辑器__;
-}
-QCheckBox::indicator:checked { background: __强调__; border: 1px solid __强调__; }
+/* 指示器由 _控件样式 自绘（见 核工坊Qt）：QSS 一旦写 ::indicator 的
+   background，就把整个子控件接管了，而对勾是 QSS 画不出来的东西 ——
+   选中态会退化成一块纯色方块，和未选中态只靠颜色区分（P2-24）。 */
 QComboBox {
     background: __编辑器__; color: __文本__;
     border: 1px solid __边框__; border-radius: 6px; padding: 5px 10px;
@@ -575,7 +619,14 @@ QLabel { background: transparent; }
 #linkLabel  { color: __强调__; background: transparent; }
 /* 版本控制面板里的 diff 预览。
    diff 是「只读的代码」，所以走编辑器的底色与等宽字体，
-   再加一条左边框把它和上面的文件列表分开。 */
+   再加一条左边框把它和上面的文件列表分开。
+
+   **字号必须自己钉死**（P1-5）。QPlainTextEdit 的通用规则用的是
+   `__字号__px`（跟着编辑器字号走）；这里只写 font-family 不写字号，
+   就会继承那条通用规则：编辑器拉到 40px 时，diff 里「选中上面的文件，
+   这里显示它的差异」这行占位文字变成巨型字、被裁掉一半，
+   而上面的文件列表还是 13px —— 同一个面板上下完全不成比例。
+   diff 是输出视图，不是编辑区，和 控制台 / 版本历史 一样固定 13px。 */
 #diffView {
     background: __编辑器__;
     color: __次要文本__;
@@ -583,6 +634,7 @@ QLabel { background: transparent; }
     border-radius: 6px;
     padding: 6px 8px;
     font-family: "__等宽字体__";
+    font-size: 13px;
 }
 QTabWidget::pane { border: none; background: __窗口__; }
 

@@ -167,7 +167,11 @@ class 版本控制窗口(QDialog):
         self.树.clear()
         self.概要.setText("正在读取版本控制状态…")
         self.空提示.setText("")
-        差异 = getattr(self, "_差异", None)
+        # 用 self.差异（控件本体）。这里以前写的是 getattr(self, "_差异", None)：
+        # 全文件根本没有 `_差异` 这个属性，于是永远拿到 None、永远不清空 ——
+        # 刷新之后下面那个差异框还留着上一次选中文件的旧差异，
+        # 看着像是「这个文件的 diff 就是这样」，其实是过期内容（P2-26）。
+        差异 = getattr(self, "差异", None)
         if 差异 is not None:
             差异.clear()
         查询器 = getattr(self.主窗, "_版本查询", None)

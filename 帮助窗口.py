@@ -8,6 +8,7 @@
 否则换到浅色主题时会变成看不见的浅灰（设置窗口踩过这个坑）。
 """
 
+import hashlib
 import os
 import sys
 
@@ -129,6 +130,10 @@ class 版本历史对话框(QDialog):
         框 = QPlainTextEdit()
         框.setReadOnly(True)
         框.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # 必须给 objectName：主题里给「输出视图」统一规定了 13px 固定字号
+        # （P2-24）。没有名字的话它会套上 QPlainTextEdit 的通用规则，
+        # 字号跟着编辑器走 —— 编辑器拉到 40px 时，版本历史一屏只剩三四行。
+        框.setObjectName("版本历史")
         框.setPlainText(self._拼文本(版本们))
         布局.addWidget(框, 1)
 
@@ -221,6 +226,22 @@ class 关于对话框(QDialog):
         self.跟主题 = True
         self._建界面()
 
+    def _内核指纹(self):
+        """返回内核文件的一小段 sha256（前面带分隔），拿不到就返回空串。
+
+        为什么要它：界面上只显示 `核.版本` 这一个版本号，而 核.py 改了
+        代码却没升版本号是很常见的（修 bug 时尤其如此）。此时「关于页
+        显示 v0.2.7」和「实际跑的是哪份 核.py」就对不上了。
+        给个 8 位指纹，至少能对比两次运行是不是同一份内核。
+        """
+        try:
+            路径 = os.path.join(这里, "核.py")
+            with open(路径, "rb") as f:
+                摘要 = hashlib.sha256(f.read()).hexdigest()[:8]
+            return "　·　%s" % 摘要
+        except OSError:
+            return ""
+
     def _建界面(self):
         布局 = QVBoxLayout(self)
         布局.setContentsMargins(主题.内边距, 主题.内边距, 主题.内边距, 主题.内边距)
@@ -237,12 +258,17 @@ class 关于对话框(QDialog):
 
         布局.addSpacing(10)
         内核文件 = "核.py"
+        # 注意别重复：上面的 副标题 已经写了「源文件后缀 .xht」，
+        # 这里以前又列一条「源文件后缀」，关于页上同一件事出现两次（P2-26）。
+        #
+        # 「界面版本 / 内核版本」同理（P3-1）：两个值都取自 核.版本，
+        # 永远一模一样 —— 关于页上连着两行 v0.2.7，用户只会以为界面写错了。
+        # 现在只留**一行**版本，把原来重复的那行换成真正有区分度的东西：
+        # 内核文件的指纹。改了 核.py 却没升版本号时，这里一眼就能看出来。
         条目 = [
-            ("界面版本", "v%s（Qt 版）" % self.内核版本),
-            ("内核版本", "v%s" % self.主窗.内核.版本),
+            ("版本", "v%s（Qt 版）" % self.内核版本),
             ("Python", sys.version.split()[0]),
-            ("源文件后缀", self.主窗.内核.扩展名),
-            ("内核文件", 内核文件),
+            ("内核文件", 内核文件 + self._内核指纹()),
         ]
         for 名, 值 in 条目:
             行 = QHBoxLayout()

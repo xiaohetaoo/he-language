@@ -62,7 +62,9 @@ sum	内置函数	2	例子/05_未定义演示.xht:9:19	例子/05_未定义演示.
 
 ### 想跑源码 / 参与开发
 
-需要 **Python 3.8+**（Windows 上建议勾选 Add Python to PATH）。
+需要 **Python 3.12+**（Windows 上建议勾选 Add Python to PATH）。
+（3.12 是**硬要求**：嵌套同引号 f-string `核"外层{核"内层"}结束"`
+依赖 PEP 701 语法，3.11 及更早的 Python 编译不了这类产物。）
 
 | 方式 | 命令 |
 | --- | --- |

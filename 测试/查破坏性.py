@@ -167,6 +167,158 @@ finally:
 
 
 # ---------------------------------------------------------------------------
+print("== 一之四、X / Esc 关掉确认框必须等于「取消」（P0-1）==")
+# 回归（数据丢失级）：用户点标题栏 X 或按 Esc 关掉「要保存吗」时，
+# QMessageBox 的 finished 参数是 NoButton（值是 0），**不是** Cancel。
+# 老代码只写 `if 答 == QMessageBox.Cancel`，0 不等于 Cancel，
+# 于是「关掉对话框」被当成「继续」：
+#   · 关闭文档()   → 标签照样被移除，文本丢失；
+#   · closeEvent   → 窗口关掉，文本丢失；多文档时还把当前这份
+#                    当「不保存」继续去问下一个（实测）。
+# 修法：统一走 核工坊Qt._判定保存答复，只认 Save/Discard，其余一律取消。
+
+# —— 判定函数本身：四条路径 ——
+# 先把「根因」钉住：NoButton 与 Cancel 是两个不同的值，0 就是 NoButton。
+# 老代码 `if 答 == QMessageBox.Cancel` 正是栽在这里。
+检(
+    "根因：NoButton 不等于 Cancel（且值为 0）",
+    QMessageBox.NoButton != QMessageBox.Cancel and int(QMessageBox.NoButton) == 0,
+    "NoButton=%r Cancel=%r" % (QMessageBox.NoButton, QMessageBox.Cancel),
+)
+检(
+    "NoButton（X / Esc）判定为取消",
+    核工坊Qt._判定保存答复(QMessageBox.NoButton) == "cancel",
+    repr(核工坊Qt._判定保存答复(QMessageBox.NoButton)),
+)
+检(
+    "Cancel 判定为取消",
+    核工坊Qt._判定保存答复(QMessageBox.Cancel) == "cancel",
+)
+检(
+    "Save 判定为保存",
+    核工坊Qt._判定保存答复(QMessageBox.Save) == "save",
+)
+检(
+    "Discard 判定为不保存",
+    核工坊Qt._判定保存答复(QMessageBox.Discard) == "discard",
+)
+# 其它等价写法也要认（另存为那条路用的是 Yes/No）
+检("Yes 等价于保存", 核工坊Qt._判定保存答复(QMessageBox.Yes) == "save")
+检("No 等价于不保存", 核工坊Qt._判定保存答复(QMessageBox.No) == "discard")
+# 未知值一律按取消 —— 白名单原则，将来 Qt 新增返回值也不会误放行
+检("未知返回值按取消处理", 核工坊Qt._判定保存答复(123456) == "cancel")
+
+# —— 关闭文档()：三条路径都要验 ——
+原三选 = 核工坊Qt._问保存三选
+
+
+def 装三选(答案):
+    def 桩(父, 标题, 文本, 默认=None):
+        return 答案
+    return 桩
+
+
+try:
+    for 答案, 应剩, 说明 in (
+        ("cancel", True, "关闭文档：取消 → 标签留着"),
+        ("discard", False, "关闭文档：不保存 → 标签移除"),
+    ):
+        窗X = 核工坊Qt.主窗()
+        窗X.show()
+        应用.processEvents()
+        窗X.新建()
+        编X = 窗X.当前
+        编X.置文本('核说("不能丢的内容")', 标记已改=True)
+        之前数 = len(窗X.文档集)
+        文本前 = 编X.取文本()
+        核工坊Qt._问保存三选 = 装三选(答案)
+        try:
+            关掉 = 窗X.关闭文档(编X)
+        finally:
+            核工坊Qt._问保存三选 = 原三选
+        应用.processEvents()
+        剩 = len(窗X.文档集)
+        if 应剩:
+            检(说明, (not 关掉) and 剩 == 之前数 and 窗X.isVisible(),
+               "关掉=%r 剩 %d/%d 可见=%r" % (关掉, 剩, 之前数, 窗X.isVisible()))
+            检(
+                "取消后文本一字未变",
+                编X.取文本() == 文本前,
+                "%r → %r" % (文本前, 编X.取文本()),
+            )
+        else:
+            检(说明, 关掉 and 剩 == 之前数 - 1,
+               "关掉=%r 剩 %d/%d" % (关掉, 剩, 之前数))
+        窗X.deleteLater()
+
+    # 保存成功才关；保存失败要留下（否则等于「保存失败=不保存」）
+    窗Y = 核工坊Qt.主窗()
+    窗Y.show()
+    应用.processEvents()
+    窗Y.新建()
+    编Y = 窗Y.当前
+    编Y.置文本('核说("要存下来")', 标记已改=True)
+    核工坊Qt._问保存三选 = 装三选("save")
+    原保存 = 核工坊Qt.主窗.保存
+
+    def 保存失败(self, 编=None, 弹窗=True):
+        return False
+
+    try:
+        核工坊Qt.主窗.保存 = 保存失败
+        关掉 = 窗Y.关闭文档(编Y)
+        检(
+            "保存失败时文档不关（不能当成不保存）",
+            (not 关掉) and 编Y in 窗Y.文档集,
+            "关掉=%r 还在=%r" % (关掉, 编Y in 窗Y.文档集),
+        )
+    finally:
+        核工坊Qt.主窗.保存 = 原保存
+        核工坊Qt._问保存三选 = 原三选
+    窗Y.deleteLater()
+finally:
+    核工坊Qt._问保存三选 = 原三选
+
+# —— closeEvent 的非模态框：真的把 finished 发成 NoButton ——
+# 这条走真实实现：调 _问要不要保存 造出框，再对框发 finished(NoButton)，
+# 断言窗口被拉回来、文档还在、已改 仍为 True。
+窗Z = 核工坊Qt.主窗()
+窗Z.show()
+应用.processEvents()
+窗Z.新建()
+编Z = 窗Z.当前
+编Z.置文本('核说("关窗也不能丢")', 标记已改=True)
+窗Z._关窗待问 = [d for d in 窗Z.文档集 if d.已改]
+窗Z._关窗确认中 = True
+窗Z._问要不要保存()
+应用.processEvents()
+框Z = getattr(窗Z, "_关窗框", None)
+检("非模态确认框建出来了", 框Z is not None)
+if 框Z is not None:
+    # NoButton 就是 X / Esc 的真实返回值
+    框Z.finished.emit(QMessageBox.NoButton)
+    应用.processEvents()
+    检(
+        "X / Esc（NoButton）后窗口仍在",
+        窗Z.isVisible(),
+        "可见=%r" % 窗Z.isVisible(),
+    )
+    检(
+        "X / Esc 后文档仍在且仍标记已改",
+        编Z in 窗Z.文档集 and 编Z.已改,
+        "在=%r 已改=%r" % (编Z in 窗Z.文档集, 编Z.已改),
+    )
+    检(
+        "X / Esc 后文本未变",
+        编Z.取文本().strip() == '核说("关窗也不能丢")',
+        repr(编Z.取文本()),
+    )
+for d in 窗Z.文档集:
+    d.已改 = False
+窗Z._关窗确认中 = False
+窗Z.deleteLater()
+
+# ---------------------------------------------------------------------------
 print("== 二、保存必须是原子写 ==")
 # 以前是 open(路径, "w") —— 先把原文件清空再写。
 # 写到一半崩了 / 磁盘满了 / 断电，用户的代码就没了。

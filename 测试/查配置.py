@@ -83,6 +83,67 @@ except Exception as e:  # noqa: BLE001
     检("写失败时不抛异常", False, str(e))
 os.environ["核工坊_配置目录"] = 临时
 
+print("== 六、坏类型 / 坏 JSON 不能让程序启动崩溃（P1-7）==")
+# 以前 读配置 只挡住「JSON 解析失败」，一旦解析成功就原样返回。
+# 而配置文件是可以被手改、被旧版本写、被同步工具截断的。实测这几种
+# 「合法 JSON、错误类型」全都会让程序**启动即崩**：
+#   [] / "文本" / 123 / null → AttributeError: 'list' object has no attribute 'get'
+#   制表宽="abc"             → ValueError: invalid literal for int()
+#   项目目录=123             → TypeError: expected str, bytes or os.PathLike … not int
+#   窗口尺寸=123             → TypeError: argument of type 'int' is not iterable
+坏用例 = [
+    ("空列表", [], {}),
+    ("字符串", "文本", {}),
+    ("数字", 123, {}),
+    ("null", None, {}),
+    ("制表宽=abc", {"制表宽": "abc"}, {}),
+    ("制表宽=0（越界）", {"制表宽": 0}, {}),
+    ("制表宽=999（越界）", {"制表宽": 999}, {}),
+    ("项目目录=123", {"项目目录": 123}, {}),
+    ("项目目录=空白串", {"项目目录": "   "}, {}),
+    ("最近=abc", {"最近": "abc"}, {}),
+    ("窗口尺寸=123", {"窗口尺寸": 123}, {}),
+    ("窗口位置=123", {"窗口位置": 123}, {}),
+    ("字号=abc", {"字号": "abc"}, {}),
+    ("缩进线=字符串", {"缩进线": "yes"}, {}),
+]
+for 名, 内容, 期望 in 坏用例:
+    with open(路径, "w", encoding="utf-8") as f:
+        if isinstance(内容, str) and 内容.startswith("{"):
+            f.write(内容)
+        else:
+            json.dump(内容, f)
+    try:
+        读回 = 配置.读配置()
+        正常 = isinstance(读回, dict) and 读回 == 期望
+        详情 = "返回 %r（期望 %r）" % (读回, 期望)
+    except Exception as e:  # noqa: BLE001
+        正常 = False
+        详情 = "%s: %s" % (type(e).__name__, e)
+    检("%s → 不崩且回退默认" % 名, 正常, 详情)
+
+# 坏字段丢了，**好字段一个都不能动**（不能因为清洗把用户设置洗没了）
+with open(路径, "w", encoding="utf-8") as f:
+    json.dump({"制表宽": "abc", "行号": False, "主题": "浅色", "字号": 20}, f)
+读回 = 配置.读配置()
+检("坏字段被丢掉", "制表宽" not in 读回, repr(读回))
+检("好字段原样保留",
+   读回.get("行号") is False and 读回.get("主题") == "浅色" and 读回.get("字号") == 20,
+   repr(读回))
+检("坏字段有留痕（不是为了静默吞掉）", bool(配置.上次问题), repr(配置.上次问题))
+
+# 半截 JSON 也要留痕
+with open(路径, "w", encoding="utf-8") as f:
+    f.write('{"主题": "深')
+配置.读配置()
+检("坏 JSON 也留痕", bool(配置.上次问题), repr(配置.上次问题))
+
+# 最近列表里的非字符串项要被摘掉，字符串项保留
+with open(路径, "w", encoding="utf-8") as f:
+    json.dump({"最近": ["a.xht", 5, None, "b.xht"]}, f)
+读回 = 配置.读配置()
+检("最近里的非字符串项被摘掉", 读回.get("最近") == ["a.xht", "b.xht"], repr(读回.get("最近")))
+
 print()
 print("=" * 62)
 if 问题:

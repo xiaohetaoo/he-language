@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 这里 = os.path.dirname(os.path.abspath(__file__))
 根目录 = os.path.dirname(这里)
@@ -167,9 +168,20 @@ def 主():
         print("打包失败，返回码 %s" % 结果.returncode)
         return 结果.returncode
 
-    产物 = os.path.join(根目录, "dist", 产物名 + ".exe")
+    # **产物路径按打包模式分开**（P3-30）。
+    # PyInstaller 的 --onefile 把 exe 放在 dist/名字.exe，
+    # 而 --onedir 放在 dist/名字/名字.exe。以前这里固定查前者，
+    # 于是 `--目录` 构建明明成功了，脚本还是打印「没找到 …」并返回 1，
+    # 让人以为打包挂了。
+    if 单文件:
+        产物 = os.path.join(根目录, "dist", 产物名 + ".exe")
+    else:
+        产物 = os.path.join(根目录, "dist", 产物名, 产物名 + ".exe")
     if not os.path.exists(产物):
         print("没找到 %s" % 产物)
+        候选 = os.path.join(根目录, "dist", 产物名 + ".exe")
+        if not 单文件 and os.path.exists(候选):
+            print("（发现了 %s —— 这是 --onefile 的产物，与 --目录 不匹配）" % 候选)
         return 1
 
     大小 = os.path.getsize(产物) / 1024.0 / 1024.0
@@ -178,14 +190,24 @@ def 主():
 
 
 def 校验产物(产物, 根目录):
-    """让 exe 自己跑一次界面自检，确认 Qt 插件与资源都在。"""
+    """让 exe 自己跑一次界面自检，确认 Qt 插件与资源都在。
+
+    **自检必须隔离用户配置**（P3-30）：_启动Qt.py 的 --自检界面 会调
+    `窗.设字号(10/20/12)`，而 设字号 会走 存配置 —— 跑一次打包自检
+    就把**用户真实的字号**重置成 12，用户下次打开发现字体变了却不知道
+    是谁改的。这里给子进程指一个临时配置目录，跑完删掉。
+    """
     输出目录 = os.path.join(根目录, "dist", "打包自检")
     shutil.rmtree(输出目录, ignore_errors=True)
     print("\n正在让 exe 自检…")
     try:
+        临时配置 = tempfile.mkdtemp(prefix="打包自检配置_")
+        环境 = dict(os.environ)
+        环境["核工坊_配置目录"] = 临时配置
         结果 = subprocess.run(
             [产物, "--自检界面", 输出目录],
             cwd=os.path.dirname(产物),
+            env=环境,
             capture_output=True,
             timeout=300,
         )

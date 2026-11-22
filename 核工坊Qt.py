@@ -14,6 +14,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -23,8 +24,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QSplitter, QTabBar,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProxyStyle, QSizePolicy,
+    QSplitter, QStyle, QTabBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 import 主题
@@ -132,6 +133,198 @@ def _还活着(对象):
     except ImportError:       # 理论上不会发生，PySide6 一定带 shiboken6
         return True
     return isValid(对象)
+
+
+def _判定保存答复(答):
+    """把 QMessageBox 的各种返回统一成三条明确的路：save / discard / cancel。
+
+    **这里是数据丢失级 bug 的根治点**：用户点标题栏的 X 或按 Esc 关掉
+    「要保存吗」对话框时，QMessageBox 返回的是 `NoButton`（值是 0），
+    不是 `Cancel`。老代码写的是 `if 答 == QMessageBox.Cancel: return False`
+    －－ 0 不等于 Cancel，于是「关掉对话框」被当成「继续」，
+    未保存的改动**无声无息丢掉**。多文档时还会把当前这份当「不保存」
+    继续去问下一个。
+
+    所以判定一律走白名单：只认 Save/Discard（以及等价的 Yes/No），
+    其余（含 NoButton、以及将来新增的任何返回值）一律按取消处理。
+    """
+    if 答 in (QMessageBox.Save, QMessageBox.Yes):
+        return "save"
+    if 答 in (QMessageBox.Discard, QMessageBox.No):
+        return "discard"
+    return "cancel"
+
+
+def _问保存三选(父, 标题, 文本, 默认=QMessageBox.Save):
+    """模态地问「保存 / 不保存 / 取消」，返回 save / discard / cancel。
+
+    与 `QMessageBox.question` 的区别：
+      · 按钮文字是中文（保存 / 不保存 / 取消）；
+      · **显式 setEscapeButton(Cancel)**：按 Esc 一定落到「取消」，
+        而不是靠平台默认（有的平台默认是 No，等于悄悄放弃改动）；
+      · 返回的是三选之一的语义值，不再让调用方去比标准按钮枚举。
+    """
+    框 = QMessageBox(父)
+    框.setWindowTitle(标题)
+    框.setText(文本)
+    框.setIcon(QMessageBox.Question)
+    框.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+    框.setDefaultButton(默认)
+    框.setEscapeButton(QMessageBox.Cancel)
+    框.button(QMessageBox.Save).setText("保存")
+    框.button(QMessageBox.Discard).setText("不保存")
+    框.button(QMessageBox.Cancel).setText("取消")
+    return _判定保存答复(框.exec())
+
+
+class _控件样式(QProxyStyle):
+    """只接管「复选框指示器」的代理样式（P2-24）。
+
+    为什么需要它：QSS 里 `QCheckBox::indicator` 一旦写了 background，
+    整个指示器子控件就交给样式表画 —— 而 QSS **画不出对勾**
+    （没有图片资源，也不支持 CSS 的 border 拼三角形）。
+    于是选中态只剩一块纯色方块，和未选中态仅靠颜色区分，
+    色弱用户和小字号下基本分不出来。
+
+    这里用 QProxyStyle 自绘：底 + 边框 + 一条真正的对勾路径，
+    尺寸固定 14×14（界面控件不跟随编辑器字号，见 pixelMetric）。
+    其它所有绘制原样交给基础样式，不影响别处。
+    """
+
+    #: 当前配色（由 主窗 在换主题时写入）
+    配色 = {}
+
+    def drawPrimitive(self, 元素, 选项, 画笔, 控件=None):
+        if 元素 == QStyle.PE_IndicatorCheckBox:
+            self._画复选框(选项, 画笔)
+            return
+        super().drawPrimitive(元素, 选项, 画笔, 控件)
+
+    def pixelMetric(self, 度量, 选项=None, 控件=None):
+        """复选框指示器**固定** 14×14（P2-2）。
+
+        上一版这里声称「随字号 13→24 缩放」，其实读的是
+        `选项.fontMetrics` —— 那是 QCheckBox 自己的字体，来自应用默认
+        9pt，根本不跟编辑器字号走。实测 12 号与 40 号字号下
+        sizeHint 都是 34x13、指示器都是 13px，两张证据截图逐像素相同。
+        声称能缩放而实际不能，比不缩放更糟。
+
+        现在的设计是明确的：**界面控件是固定字号，只有编辑区正文跟随
+        字号**（和 控制台 / 版本历史 / diffView 的处理一致）。
+        所以指示器就是固定 14px，不再假装缩放。
+        """
+        if 度量 in (QStyle.PM_IndicatorWidth, QStyle.PM_IndicatorHeight):
+            return 14
+        return super().pixelMetric(度量, 选项, 控件)
+
+    def _画复选框(self, 选项, 画笔):
+        from PySide6.QtCore import QPointF, Qt as _Qt
+        from PySide6.QtGui import QColor, QPainterPath, QPen
+
+        区域 = 选项.rect.adjusted(1, 1, -1, -1)
+        边 = min(区域.width(), 区域.height())
+        if 边 <= 0:
+            return
+        # 摆正成正方形（QSS 去掉之后光标区可能给一个偏宽的区域）
+        区域.setWidth(边)
+        状态 = 选项.state
+        选中 = bool(状态 & QStyle.State_On)
+        半选 = bool(状态 & QStyle.State_NoChange)
+        可用 = bool(状态 & QStyle.State_Enabled)
+        配色 = self.配色 or {}
+        强调 = QColor(配色.get("强调", "#3574F0"))
+        # 未选中态的边框不能用 边框 色（#393B40）：它和面板底只差一点点，
+        # 在深色主题上看上去就是「一个黑方块」，用户分不清那是选择框
+        # 还是选中的实心块。用「次要文本」这一档（深 #B2B6BE / 浅 #5F6672）
+        # 才能一眼看出「这里有个空框可以勾」。
+        边框 = QColor(配色.get("次要文本", "#B2B6BE"))
+        底 = QColor(配色.get("编辑器", "#1E1F22"))
+        字 = QColor(配色.get("文本", "#DFE1E5"))
+        if not 可用:
+            强调 = 强调.darker(160)
+            边框 = 边框.darker(130)
+            字 = QColor(配色.get("禁用文本", "#6F737A"))
+
+        画笔.save()
+        画笔.setRenderHint(画笔.RenderHint.Antialiasing, True)
+        画笔.setPen(QPen(强调 if 选中 or 半选 else 边框, 1.2))
+        画笔.setBrush(强调 if 选中 or 半选 else 底)
+        半径 = max(3.0, 边 * 0.22)
+        画笔.drawRoundedRect(区域, 半径, 半径)
+
+        if 选中 or 半选:
+            路径 = QPainterPath()
+            if 半选:
+                # 半选：一条短横线（三态里「部分选中」的通用画法）
+                左 = 区域.left() + 边 * 0.25
+                右 = 区域.right() - 边 * 0.25
+                中 = 区域.center().y()
+                路径.moveTo(QPointF(左, 中))
+                路径.lineTo(QPointF(右, 中))
+            else:
+                # 对勾：两段折线，比例按边长算，缩放不变形
+                路径.moveTo(QPointF(区域.left() + 边 * 0.24, 区域.top() + 边 * 0.52))
+                路径.lineTo(QPointF(区域.left() + 边 * 0.42, 区域.top() + 边 * 0.70))
+                路径.lineTo(QPointF(区域.left() + 边 * 0.77, 区域.top() + 边 * 0.30))
+            if not 可用:
+                路径 = 路径  # 颜色已在上面的「字」里处理
+            画笔.setPen(QPen(字, max(1.6, 边 * 0.14), _Qt.SolidLine, _Qt.RoundCap, _Qt.RoundJoin))
+            画笔.setBrush(_Qt.NoBrush)
+            画笔.drawPath(路径)
+        画笔.restore()
+
+
+def 安装控件样式():
+    """把 _控件样式 装到当前 QApplication 上（幂等）。"""
+    应用 = QApplication.instance()
+    if 应用 is None:
+        return None
+    已有 = getattr(应用, "_核控件样式", None)
+    if 已有 is not None:
+        return 已有
+    样式 = _控件样式(应用.style())
+    应用.setStyle(样式)
+    应用._核控件样式 = 样式
+    return 样式
+
+
+class 省略标签(QLabel):
+    """放不下时用省略号收尾、并且把全文放 tooltip 的 QLabel（P2-21）。
+
+    以前状态栏两个 QLabel 都是普通 QLabel：长文本（比如
+    「配置文件有 3 处不合法，已回退默认：…」）会把 sizeHint 撑到 693px，
+    实际只有 489px 可用 —— Qt 直接**硬裁**，没有省略号，
+    而且把右边的编码/行列挤出可视区。用户看到的是一句断在半截的话，
+    也分不清右边那栏是没了还是没刷新。
+    """
+
+    def __init__(self, 文本="", 父=None):
+        super().__init__(文本, 父)
+        self._全文 = 文本
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(0)
+
+    def 设全文(self, 文本):
+        self._全文 = 文本 or ""
+        self.setToolTip(self._全文)
+        self._重排()
+
+    def resizeEvent(self, 事件):
+        super().resizeEvent(事件)
+        self._重排()
+
+    def _重排(self):
+        可用 = max(0, self.width())
+        显示 = self.fontMetrics().elidedText(
+            self._全文, Qt.ElideRight, 可用)
+        # 用 super 直接写，避免 setText 递归
+        super().setText(显示)
+
+    def text(self):  # noqa: A003 - 与 QLabel 同名，语义就是「显示出来的文本」
+        return super().text()
+
+    def 全文(self):
+        return self._全文
 
 
 def 图标路径(名):
@@ -591,14 +784,27 @@ class 主窗(QMainWindow):
         # 配置里存的值可能来自旧版本（旧范围只到 22）或被手改过，
         # 一律夹进当前允许范围，否则会拿到 60pt 这种排不下的字号。
         self.字号 = 主题.夹字号(self.配置.get("字号", 12))
-        self.制表宽 = int(self.配置.get("制表宽", 4))
-        self.显示缩进线 = bool(self.配置.get("缩进线", True))
-        self.显示行号 = bool(self.配置.get("行号", True))
-        self.自动高亮 = bool(self.配置.get("自动高亮", True))
-        self.最近 = list(self.配置.get("最近", []))
+        # 配置.py 已经做过 schema 校验，这里再兜一层强制转换。
+        # 不是多此一举：配置对象在运行期也会被 应用设置/设制表宽 等
+        # 直接改写，代码里任何一处写进坏值，都该在用的地方挡住，
+        # 而不是指望上游永远干净（P1-7 的崩溃就是从 int("abc") 来的）。
+        self.制表宽 = self._安全制表宽(self.配置.get("制表宽", 4))
+        self.显示缩进线 = self.配置.get("缩进线", True) is not False
+        self.显示行号 = self.配置.get("行号", True) is not False
+        self.自动高亮 = self.配置.get("自动高亮", True) is not False
+        self.最近 = [x for x in self.配置.get("最近", [])
+                     if isinstance(x, str)] if isinstance(
+            self.配置.get("最近", []), list) else []
         self.文档集 = []
         self.当前 = None
-        self.项目目录 = self.配置.get("项目目录") or _默认项目目录()
+        项目 = self.配置.get("项目目录")
+        self.项目目录 = 项目 if isinstance(项目, str) and 项目.strip() else _默认项目目录()
+        #: 「持久配置里的项目目录」与「本次会话正在看的项目目录」分开记（P1-14）。
+        #: 拖一个文件夹进来只是想看看，不该把它永久写进配置；
+        #: 以前拖放路径先把 self.配置["项目目录"] 还原、再 存配置()，
+        #: 但 self.项目目录 已经被 装载项目树() 改掉了 —— 下一次
+        #: 存配置()（退出、改字号、应用设置）又把会话值写回磁盘。
+        self._持久项目目录 = self.项目目录
         self.进程 = None
         self._输出 = queue.Queue()
         self._轮询 = None
@@ -619,11 +825,24 @@ class 主窗(QMainWindow):
         if os.path.exists(图标路径("核图标.ico")):
             self.setWindowIcon(QIcon(图标路径("核图标.ico")))
 
+        # 自绘复选框指示器（P2-24）必须在建界面之前装好，
+        # 否则设置窗口里的勾选框会先按 QSS 的纯色方块画一次。
+        样式 = 安装控件样式()
+        if 样式 is not None:
+            样式.配色 = self.主题
+
         self._建界面()
         self._绑快捷键()
         self._套样式()
         self._应用窗口外观()
         self._刷新图标()
+        # 配置里有字段被清洗掉了 → 启动后说一句（P1-7）。
+        # 悄悄回退默认最糟：用户看到字号/主题/项目目录变了，
+        # 却不知道是自己手改配置改坏了，会以为软件在乱改设置。
+        # 延到事件循环起来再提示，避免在建界面途中还碰状态栏。
+        坏字段 = list(getattr(配置, "上次问题", []))
+        if 坏字段:
+            QTimer.singleShot(0, lambda: self._提示坏配置(坏字段))
 
         self.装载项目树(self.项目目录)
         self.新建()
@@ -659,21 +878,42 @@ class 主窗(QMainWindow):
 
         这里不弹框、不等用户 —— 会话管理器给的窗口期只有几秒，
         弹一个框必然来不及回答，反而把文件全丢掉。
-        能存就直接存（未命名文档没有路径，只能放弃，存不了）。
         存盘失败也继续走，不能因为一个文件写不进去就卡住关机。
+
+        **两条硬规矩**（P1-15）：
+
+        1. 这里只做「尽快保存」，**不许永久停后台**。
+           桌面是**可能取消关机**的（Windows 会问「还有程序没关，要强制关机吗」）。
+           老实现存完盘直接调 收尾退出(真退出=True) → 停止(静默=True)
+           + 版本查询器.停()，然后把 _正在退出 复位了事。用户点「取消」之后
+           程序还在，但运行进程和版本查询器已经死了 —— 之后再点运行没反应、
+           版本状态永远停在旧值，只能重启。停后台要留到真正关窗时做。
+        2. **未命名文档不能静默丢**。老实现 `if not 编.文件路径: continue`
+           就跳过了：用户写了一屏没保存的新文件，关个机什么都没了。
+           现在先落一份恢复文件到临时目录，并在状态栏/日志里给出路径。
+
+        真正退出（窗口销毁）时 closeEvent → 收尾退出 才会停那些东西。
         """
         self._正在退出 = True
+        恢复了 = []
         try:
             for 编 in list(self.文档集):
                 if not _还活着(编) or not 编.已改:
                     continue
-                if not 编.文件路径:
-                    continue      # 未命名，没地方写
-                try:
-                    self.保存(编, 弹窗=False)
-                except Exception:  # noqa: BLE001
+                if 编.文件路径:
+                    try:
+                        self.保存(编, 弹窗=False)
+                    except Exception:  # noqa: BLE001
+                        continue
                     continue
-            self._收尾退出()
+                # 未命名：写一份恢复文件，别让它跟关机一起消失
+                恢复 = self._写恢复文件(编)
+                if 恢复:
+                    恢复了.append(恢复)
+            # 这里**只写配置**，不碰运行进程与版本查询器（见规矩 1）。
+            self.存配置(强制=True)
+            if 恢复了:
+                self._记录恢复文件(恢复了)
         finally:
             # 必须复位。
             #
@@ -687,12 +927,66 @@ class 主窗(QMainWindow):
             # 所以存完盘就把标志放下来，让窗口回到「正常可关闭」状态。
             self._正在退出 = False
 
+    def _写恢复文件(self, 编):
+        """把未命名文档的当前内容写到临时目录，返回路径；失败返回 None。"""
+        try:
+            目录 = os.path.join(tempfile.gettempdir(), "核工坊-恢复")
+            os.makedirs(目录, exist_ok=True)
+            时刻 = time.strftime("%Y%m%d-%H%M%S")
+            名 = "恢复_%s_%s.xht" % (时刻, getattr(编, "未命名标题", "未命名"))
+            # 标题里可能有空格/序号，去掉路径非法字符
+            for 字 in '<>:"/\\|?*':
+                名 = 名.replace(字, "_")
+            路径 = os.path.join(目录, 名)
+            with open(路径, "w", encoding="utf-8", newline="\n") as f:
+                f.write(编.取文本())
+            return 路径
+        except OSError:
+            return None
+
+    def _记录恢复文件(self, 路径们):
+        """把恢复文件的路径写进日志并在状态栏提示（不能只留在内存里）。"""
+        行 = "关机时未命名文档已保存到：\n" + "\n".join(路径们) + "\n"
+        try:
+            日志 = os.path.join(tempfile.gettempdir(), "核工坊-恢复", "恢复说明.txt")
+            with open(日志, "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + 行)
+        except OSError:
+            pass
+        try:
+            self.状态("关机：%d 个未命名文档已存到 %s" % (
+                len(路径们), os.path.dirname(路径们[0])))
+        except (AttributeError, RuntimeError):
+            pass
+
     def _标记退出中(self):
         self._收到退出信号 = True
 
+    def _提示坏配置(self, 坏字段):
+        """把「哪些设置因为值不合法被重置了」告诉用户（P1-7）。"""
+        明细 = "、".join("「%s」%s" % (名, 因) for 名, 因 in 坏字段[:4])
+        if len(坏字段) > 4:
+            明细 += " 等 %d 项" % len(坏字段)
+        self.状态("配置文件有 %d 处不合法，已回退默认：%s" % (len(坏字段), 明细))
+        try:
+            self.状态左.setToolTip(
+                "配置里有这些字段不合法，已按默认值启动（文件：%s）：\n%s"
+                % (配置.配置路径(), "\n".join("· %s：%s" % (名, 因) for 名, 因 in 坏字段))
+            )
+        except (AttributeError, RuntimeError):
+            pass
+
     def _还原窗口尺寸(self):
-        """按上次保存的尺寸和位置还原；越界或异常就回默认值。"""
+        """按上次保存的尺寸和位置还原；越界或异常就回默认值。
+
+        `窗口尺寸` / `窗口位置` 必须先是字符串再谈内容（P1-7）：
+        以前直接 `"x" in 尺寸`，配置里若写成数字，`in` 会抛
+        `TypeError: argument of type 'int' is not iterable` ——
+        窗口还没建完程序就退了。配置.py 已经挡过一层，这里再挡一次。
+        """
         尺寸 = self.配置.get("窗口尺寸", "")
+        if not isinstance(尺寸, str):
+            尺寸 = ""
         宽 = 高 = None
         if "x" in 尺寸:
             try:
@@ -710,6 +1004,8 @@ class 主窗(QMainWindow):
         self.resize(宽, 高)
 
         位置 = self.配置.get("窗口位置", "")
+        if not isinstance(位置, str):
+            位置 = ""
         if "," in 位置:
             try:
                 x, y = (int(v) for v in 位置.split(","))
@@ -800,6 +1096,11 @@ class 主窗(QMainWindow):
         self.树 = QTreeWidget()
         self.树.setHeaderHidden(True)
         self.树.itemDoubleClicked.connect(self._双击树)
+        # **展开就加载**（P2-19）。
+        # 以前只有双击文件夹时才调 _填目录，点展开箭头展开出来
+        # 永远只有一个字面的「…」占位——用户看到的是「这个文件夹是空的」，
+        # 或者以为树坏了。
+        self.树.itemExpanded.connect(self._展开树)
         self.树.setContextMenuPolicy(Qt.CustomContextMenu)
         self.树.customContextMenuRequested.connect(self._树右键)
         布局.addWidget(self.树, 1)
@@ -907,6 +1208,38 @@ class 主窗(QMainWindow):
         self._填对照表()
         return 框
 
+    @staticmethod
+    def _显示宽度(文):
+        """按「屏幕占几列」算宽度：中文/全角算 2，其余算 1（P2-25）。
+
+        `"%-10s"` 是按**字符个数**补空格的。中文名的字符数是 3、显示占 6 列，
+        英文名 `print` 是 5 个字符占 5 列 —— 混在一列里 `=` 就参差不齐：
+        中文行提前 3 格碰到等号，英文行准时。等宽字体下看得出来，
+        这一栏本来就是为了「一眼对照」，歪着看很难受。
+        """
+        宽 = 0
+        for 字 in 文:
+            码 = ord(字)
+            if (
+                0x1100 <= 码 <= 0x115F          # 谚文字母
+                or 0x2E80 <= 码 <= 0xA4CF      # 中日韩部首、假名、汉字
+                or 0xAC00 <= 码 <= 0xD7A3      # 谚文音节
+                or 0xF900 <= 码 <= 0xFAFF      # 兼容汉字
+                or 0xFE30 <= 码 <= 0xFE6F      # 兼容形式
+                or 0xFF00 <= 码 <= 0xFF60      # 全角
+                or 0xFFE0 <= 码 <= 0xFFE6
+                or 0x1F300 <= 码 <= 0x1FAFF    # emoji
+            ):
+                宽 += 2
+            else:
+                宽 += 1
+        return 宽
+
+    @classmethod
+    def _补到宽(cls, 文, 宽):
+        """把 文 补到**显示宽度** 宽（已经不短就原样返回）。"""
+        return 文 + " " * max(0, 宽 - cls._显示宽度(文))
+
     def _填对照表(self):
         c = self.内核
         行 = []
@@ -922,7 +1255,7 @@ class 主窗(QMainWindow):
             行.append("%s (%d)" % (标题, len(表)))
             行.append("")
             for 中, 英 in sorted(表.items()):
-                行.append("  %-*s = %s" % (宽, 中, 英))
+                行.append("  %s = %s" % (self._补到宽(中, 宽), 英))
             行.append("")
         self.对照.setPlainText("\n".join(行))
 
@@ -995,13 +1328,18 @@ class 主窗(QMainWindow):
         布局.setSpacing(主题.间距_段)
         self.状态项目 = QLabel("")
         self.状态项目.setObjectName("statusLeft")
-        self.状态左 = QLabel("")
+        # 项目名固定窄宽度，长文本只在「状态左」里滚动 —— 否则一个很深的
+        # 项目路径会把中间那栏挤成 0 宽（P2-21）。
+        self.状态项目.setFixedWidth(140)
+        self.状态项目.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.状态左 = 省略标签("")
         self.状态左.setObjectName("statusLeft")
         布局.addWidget(self.状态项目)
-        布局.addWidget(self.状态左)
-        布局.addStretch(1)
+        布局.addWidget(self.状态左, 1)
         self.状态右 = QLabel("核语言   空格 4   UTF-8")
         self.状态右.setObjectName("statusRight")
+        # 右侧信息不许被挤掉：给它一个最小宽度（内容大约 260px）
+        self.状态右.setMinimumWidth(260)
         布局.addWidget(self.状态右)
         return 条
 
@@ -1045,27 +1383,115 @@ class 主窗(QMainWindow):
         新 = (当前 + 方向) % self.标签栏.count()
         self.标签栏.setCurrentIndex(新)
 
+    @staticmethod
+    def _合法文件名(新名, 扩展名=".xht"):
+        """把用户输入的文件名清洗成一个**纯文件名**，不合法就返回 (None, 原因)。
+
+        F2 重命名以前直接把输入拼进目录（P1-9）：
+
+            ..\\逃逸.xht   → 文件被移出项目目录，标签路径变成 ...\\子\\..\\逃逸.xht
+            C:\\绝对.xht   → 文件被搬到别的盘
+            子/目录.xht    → os.rename 直接失败，提示「重命名失败」看不出原因
+            空名           → 同上
+            无后缀.xht     → 存成没有后缀的文件，项目树再也显示不出来
+
+        规则：只接受纯文件名 —— 不含路径分隔符、不是 . / ..、不是绝对路径。
+        没写后缀的自动补上（这样重命名之后项目树仍然认得它）。
+        """
+        名 = (新名 or "").strip('"')
+        if not 名.strip():
+            return None, "文件名不能为空"
+        # 开头/结尾的空格要**拒绝**，不能悄悄 strip 掉（P3-2）：
+        # 用户输入 `带空格 `，被静默改成 `带空格`，重命名"成功"了，
+        # 但名字和他输入的不一样；结尾空格在 Windows 上更会被系统吃掉。
+        if 名 != 名.strip():
+            return None, "开头或结尾不能有空格"
+        # 任何路径成分都拒绝：正反斜杠、盘符、以点开头的相对路径
+        if any(切 in 名 for 切 in ("/", "\\")):
+            return None, "文件名里不能带路径分隔符（/ 或 \\）"
+        if 名 in (".", ".."):
+            return None, "这不是一个文件名"
+        if os.path.isabs(名) or (len(名) > 1 and 名[1] == ":"):
+            return None, "不能填绝对路径"
+        # 尾随的点和空格（P3-2）。
+        # Windows 会在创建文件时**静默去掉**结尾的点和空格：用户输入
+        # `a.`，实际得到 `a`；输入 `a ` 得到 `a`。于是「重命名成功了」，
+        # 但标签上显示的名字和磁盘上的实际名字不一致，再打开就找不到原文件。
+        if 名 != 名.rstrip(" ."):
+            return None, "结尾不能是点或空格（Windows 会把它悄悄吃掉）"
+        # Windows 设备保留名（P3-2）：CON / PRN / AUX / NUL / COM1-9 / LPT1-9。
+        # 它们在**任何扩展名下**都不合法：`CON.xht` 在资源管理器里创建会失败，
+        # 在部分接口下还会被当成控制台设备。os.rename 到这类名字可能报
+        # 「文件名、目录名或卷标语法不正确」，提示完全看不出原因。
+        主干 = 名.split(".")[0].strip().upper()
+        if 主干 in ("CON", "PRN", "AUX", "NUL", "CLOCK$") or (
+            len(主干) == 4 and 主干[:3] in ("COM", "LPT") and 主干[3] in "123456789"
+        ):
+            return None, "「%s」是 Windows 的设备保留名，不能当文件名" % 主干
+        # `..foo.xht` 这种开头带点的**是**合法文件名（不是相对路径），
+        # 上面已经把真正的 `.` / `..` 拦掉了，这里放行。
+        # Windows 非法字符
+        if any(字 in 名 for 字 in '<>:"|?*'):
+            return None, "文件名里不能出现 < > : \" | ? * 这些字符"
+        if not 名.lower().endswith(扩展名.lower()):
+            名 += 扩展名
+        return 名, None
+
     def 重命名当前(self):
-        """F2 重命名当前文件（另存为新名字后替换旧标签）。"""
+        """F2 重命名当前文件（改名后同步标签、项目树与最近打开）。"""
         if self.当前 is None or not self.当前.文件路径:
             self.状态("先保存文件再重命名")
             return
         from PySide6.QtWidgets import QInputDialog
 
         旧名 = os.path.basename(self.当前.文件路径)
-        新名, 确定 = QInputDialog.getText(self, "重命名", "新文件名：", text=旧名)
-        if not 确定 or not 新名 or 新名 == 旧名:
+        输入, 确定 = QInputDialog.getText(self, "重命名", "新文件名：", text=旧名)
+        if not 确定 or not 输入:
+            return
+        新名, 原因 = self._合法文件名(输入, self.内核.扩展名)
+        if 新名 is None:
+            # 说清楚为什么不行，不要走到 os.rename 再报「重命名失败」
+            self.状态("重命名失败：%s" % 原因)
+            return
+        if 新名 == 旧名:
             return
         旧路径 = self.当前.文件路径
         新路径 = os.path.join(os.path.dirname(旧路径), 新名)
+        # **仅大小写不同**的重命名要放行（P3-2）。
+        # Windows 文件系统不区分大小写：`a.xht → A.xht` 时
+        # os.path.exists(新路径) 为真（它就是原文件自己），
+        # 老代码于是报「A.xht 已经存在」，用户永远改不了大小写。
+        # 判据是 normcase 之后是不是同一个路径。
+        仅改大小写 = (os.path.normcase(新路径) == os.path.normcase(旧路径))
+        if not 仅改大小写 and os.path.exists(新路径):
+            self.状态("重命名失败：%s 已经存在" % 新名)
+            return
+        编 = self.当前
         try:
-            os.rename(旧路径, 新路径)
+            if 仅改大小写:
+                # 直接 rename 到同名不同大小写在 Windows 上是 no-op，
+                # 必须绕一圈：先改成一个临时名，再改成目标名。
+                临时 = 旧路径 + ".renaming"
+                os.rename(旧路径, 临时)
+                os.rename(临时, 新路径)
+            else:
+                os.rename(旧路径, 新路径)
         except OSError as e:
             self.状态("重命名失败：%s" % e)
             return
-        self.当前.文件路径 = 新路径
-        self.刷新标签(self.当前)
+        编.文件路径 = 新路径
+        # 改了名字，磁盘签名要重新取 —— 旧签名对应的是旧路径，
+        # 留着它下次保存会误报「磁盘已被外部修改」。
+        编._磁盘签名 = self._取磁盘签名(新路径)
+        self.刷新标签(编)
         self._刷新标题()
+        # 项目树与最近打开都要同步：只改标签的话，树里还是旧名字、
+        # 「最近打开」点开指向旧路径（P1-9）。
+        try:
+            self.装载项目树(self.项目目录, 记住=False)
+        except Exception:  # noqa: BLE001
+            pass
+        self.加最近(新路径)
         self.状态("已重命名为 %s" % 新名)
 
     def 在项目中查找(self):
@@ -1076,6 +1502,7 @@ class 主窗(QMainWindow):
         if not 确定 or not 词:
             return
         命中 = 0
+        跳过 = []
         self.清空控制台()
         self._写控制台("在项目中查找：%s\n" % 词)
         for 目录, 子目录, 文件 in os.walk(self.项目目录):
@@ -1087,12 +1514,20 @@ class 主窗(QMainWindow):
                 if not 名.endswith(".xht"):
                     continue
                 全 = os.path.join(目录, 名)
+                # **用内核的编码探测，不要用 errors="replace" 假装读到了**（P1-13）。
+                # 以前固定 `encoding="utf-8", errors="replace"`：
+                # GBK 编码的文件里写「苹果 = 1」，读出来是乱码，搜「苹果」
+                # 永远 0 命中 —— 文件明明在项目里、明明写着这两个字。
+                # 内核的 读源码 已经按 UTF-8-sig → UTF-8 → GBK 探测过，
+                # 和打开文件时用的是同一套口径，这里直接复用。
                 try:
-                    with open(全, encoding="utf-8", errors="replace") as f:
-                        行们 = f.readlines()
-                except OSError:
+                    内容 = self.内核.读源码(全, 严格=True)
+                except (OSError, UnicodeDecodeError):
+                    # 读不了（二进制、权限、编码都猜不中）就跳过并计数，
+                    # 不崩、也不把它当成「没命中」悄悄吞掉。
+                    跳过.append(os.path.relpath(全, self.项目目录))
                     continue
-                for 号, 行 in enumerate(行们, 1):
+                for 号, 行 in enumerate(内容.splitlines(), 1):
                     if 词 in 行:
                         命中 += 1
                         相对 = os.path.relpath(全, self.项目目录)
@@ -1100,7 +1535,14 @@ class 主窗(QMainWindow):
                             "%s:%d:  %s\n" % (相对, 号, 行.rstrip())
                         )
         self._写控制台("\n共 %d 处\n" % 命中)
-        self.状态("项目内找到 %d 处" % 命中)
+        if 跳过:
+            self._写控制台("跳过 %d 个读不了的文件：%s\n"
+                           % (len(跳过), "、".join(跳过[:5])))
+        self.状态(
+            "项目内找到 %d 处%s" % (
+                命中, ("，跳过 %d 个读不了的文件" % len(跳过)) if 跳过 else ""
+            )
+        )
 
     # ================= 文档管理 =================
 
@@ -1243,13 +1685,16 @@ class 主窗(QMainWindow):
 
     def 关闭文档(self, 编, 强制=False):
         if 编.已改 and not 强制:
-            答 = QMessageBox.question(
-                self, "保存确认", "「%s」已修改，要保存吗？" % self._文件名(编),
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            # 只有「保存」和「不保存」才允许继续；X / Esc → 取消。
+            # 老写法 `if 答 == QMessageBox.Cancel: return False` 漏掉了
+            # NoButton(0)，于是点标题栏 X 等于「不保存」，改动直接丢。
+            答 = _问保存三选(
+                self, "保存确认",
+                "「%s」已修改，要保存吗？" % self._文件名(编),
             )
-            if 答 == QMessageBox.Cancel:
+            if 答 == "cancel":
                 return False
-            if 答 == QMessageBox.Yes and not self.保存(编):
+            if 答 == "save" and not self.保存(编):
                 return False
         try:
             索引 = self.文档集.index(编)
@@ -1283,10 +1728,208 @@ class 主窗(QMainWindow):
         if 路径:
             self.打开(路径)
 
-    def 打开(self, 路径):
+    def _规范路径(self, 路径):
+        """比较两个路径「是不是同一个文件」用的规范形式。
+
+        **必须 abspath + normcase 一起用**（P1-27）：
+        以前只 normcase 原始字符串，于是 `D:\\项目\\a.xht` 和
+        `a.xht`（或 `..\\项目\\a.xht`）被当成两个不同文件，
+        同一个文件在标签栏里开出两个编辑器 —— 后存的那个把先存的覆盖掉，
+        用户以为改的是「另一份」。
+        Windows 不区分大小写，normcase 顺便把大小写也抹平。
+        """
+        try:
+            return os.path.normcase(os.path.abspath(路径))
+        except (TypeError, ValueError):
+            return None
+
+    def _另一个标签占了这路径(self, 路径, 排除=None):
+        """这个路径是不是已经被**另一个**标签打开？是就返回那个文档。
+
+        **另存为覆盖另一个已打开文档**是数据脱节级的问题（P1-4）：
+        甲、乙两个文件都开着，把甲「另存为」到乙的路径并确认覆盖后 ——
+        磁盘上乙变成了甲的内容，可乙的标签里还显示着**旧内容**、已改=False。
+        用户接着在那个标签里编辑并保存，就把甲刚写进去的内容又盖掉了。
+        磁盘和标签从这一刻起各说各话。所以这里直接拒绝，不静默覆盖。
+        """
+        目标 = self._规范路径(路径)
+        if 目标 is None:
+            return None
         for d in self.文档集:
-            if d.文件路径 and os.path.normcase(d.文件路径) == os.path.normcase(路径):
+            if d is 排除:
+                continue
+            if d.文件路径 and self._规范路径(d.文件路径) == 目标:
+                return d
+        return None
+
+    @staticmethod
+    def _安全制表宽(值):
+        """把任意值转成合规的制表宽（1–16），转不了就用默认 4。"""
+        数 = None
+        if isinstance(值, bool):
+            数 = None
+        elif isinstance(值, int):
+            数 = 值
+        elif isinstance(值, float) and 值 == 值 and abs(值) != float("inf"):
+            数 = int(值)
+        elif isinstance(值, str):
+            try:
+                数 = int(值.strip())
+            except (TypeError, ValueError):
+                数 = None
+        if 数 is None or not (1 <= 数 <= 16):
+            return 4
+        return 数
+
+    @staticmethod
+    def _取磁盘签名(路径):
+        """磁盘上这个文件的 (mtime_ns, 大小)；拿不到（不存在/无权限）返回 None。
+
+        **必须带 ns，也必须带 size**（P1-5）：
+        只比 mtime 的话，同一秒内被外部改写就看不出来 ——
+        st_mtime 是浮点秒，文件系统实际精度可能只有 1s 或 2s。
+        st_mtime_ns 是纳秒整数，再加大小兜一层，日常场景足够。
+        """
+        try:
+            状 = os.stat(路径)
+        except (OSError, TypeError, ValueError):
+            return None
+        return (状.st_mtime_ns, 状.st_size)
+
+    def _问覆盖外部修改(self, 编):
+        """磁盘上的文件在编辑期间被别人改过了 —— 问用户怎么办（P1-5）。
+
+        返回 "overwrite" / "saveas" / "cancel"。
+        以前保存**完全不看磁盘**，直接原子写覆盖：用户在别的编辑器里
+        改过同一个文件，回来一保存就把它悄悄盖掉了，没有任何提示。
+        """
+        框 = QMessageBox(self)
+        框.setWindowTitle("磁盘上的文件已修改")
+        框.setText(
+            "「%s」在你编辑期间已经被别的程序改过了。\n\n"
+            "  覆盖   —— 用编辑器里的内容盖掉磁盘上的\n"
+            "  另存为 —— 保留磁盘上的，另存成别的文件\n"
+            "  取消   —— 什么都不做" % self._文件名(编)
+        )
+        框.setIcon(QMessageBox.Warning)
+        覆盖 = 框.addButton("覆盖", QMessageBox.AcceptRole)
+        另存 = 框.addButton("另存为", QMessageBox.ActionRole)
+        取消 = 框.addButton("取消", QMessageBox.RejectRole)
+        框.setDefaultButton(另存)
+        框.setEscapeButton(取消)
+        框.exec()
+        点 = 框.clickedButton()
+        if 点 is 覆盖:
+            return "overwrite"
+        if 点 is 另存:
+            return "saveas"
+        return "cancel"
+
+    def _问文件已消失(self, 编):
+        """要保存的文件在磁盘上没了 —— 问用户怎么办（P1-4）。
+
+        返回 "recreate" / "saveas" / "cancel"。
+
+        「保存」的直觉是「写回我正在编辑的那个文件」。文件已经不在了，
+        这个直觉就断了：可能是用户自己删的、可能是改名了、也可能是
+        整个目录被移走。默默在原路径重建，等于把「删除」这个动作反悔掉，
+        而且用户完全不知道发生过什么。
+        """
+        框 = QMessageBox(self)
+        框.setWindowTitle("文件已不存在")
+        框.setText(
+            "「%s」已经不在原来的位置了（被删除、改名或移动）。\n\n"
+            "  重新创建 —— 在当前路径重新写一份\n"
+            "  另存为   —— 存成别的文件，原路径保持没有\n"
+            "  取消     —— 什么都不做" % self._文件名(编)
+        )
+        框.setIcon(QMessageBox.Warning)
+        重建 = 框.addButton("重新创建", QMessageBox.AcceptRole)
+        另存 = 框.addButton("另存为", QMessageBox.ActionRole)
+        取消 = 框.addButton("取消", QMessageBox.RejectRole)
+        框.setDefaultButton(另存)
+        框.setEscapeButton(取消)
+        框.exec()
+        点 = 框.clickedButton()
+        if 点 is 重建:
+            return "recreate"
+        if 点 is 另存:
+            return "saveas"
+        return "cancel"
+
+    def _问磁盘已变(self, 编):
+        """再次打开一个**已经在标签里**的文件，但磁盘内容变了（P2-1）。
+
+        返回 "reload" / "keep" / "cancel"。
+
+        以前 打开() 的路径去重直接 `return 旧编辑器`：用户在外部把
+        a.xht 改成「甲 = 9」，再双击 a.xht，看到的还是「甲 = 1」——
+        没有提示、也不重载，用户会以为磁盘根本没变。
+        """
+        框 = QMessageBox(self)
+        框.setWindowTitle("磁盘上的文件已修改")
+        框.setText(
+            "「%s」已经在编辑器里打开了，但磁盘上的内容变了。\n\n"
+            "  重新加载 —— 丢掉编辑器里的改动，以磁盘为准\n"
+            "  保留当前 —— 继续编辑现在的内容（保存时还会再问一次）\n"
+            "  取消     —— 什么都不做" % self._文件名(编)
+        )
+        框.setIcon(QMessageBox.Question)
+        重载 = 框.addButton("重新加载", QMessageBox.AcceptRole)
+        保留 = 框.addButton("保留当前", QMessageBox.RejectRole)
+        取消 = 框.addButton("取消", QMessageBox.RejectRole)
+        框.setDefaultButton(重载)
+        框.setEscapeButton(取消)
+        框.exec()
+        点 = 框.clickedButton()
+        if 点 is 重载:
+            return "reload"
+        if 点 is 保留:
+            return "keep"
+        return "cancel"
+
+    def _重新加载(self, 编, 路径):
+        """把磁盘上的内容重新读进编辑器，并刷新磁盘签名（P2-1）。"""
+        try:
+            内容, 编码 = self.内核.读源码(路径, 返回编码=True)
+        except OSError as e:
+            self.状态("重新加载失败：%s" % e)
+            return False
+        编.编码 = 编码
+        编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
+        编.已改 = False
+        try:
+            编.document().setModified(False)
+        except (AttributeError, RuntimeError):
+            pass
+        编._磁盘签名 = self._取磁盘签名(编.文件路径)
+        self.刷新标签(编)
+        self.状态("已重新加载 %s" % os.path.basename(路径))
+        return True
+
+    def 打开(self, 路径):
+        # 去重要在 abspath 之后比（P1-27）：相对路径与绝对路径指向
+        # 同一个文件时必须只开一个标签。
+        规范 = self._规范路径(路径)
+        for d in self.文档集:
+            if d.文件路径 and 规范 is not None and self._规范路径(d.文件路径) == 规范:
                 self._显示文档(d)
+                # **命中同路径标签时不能直接 return 旧对象**（P2-1）：
+                # 磁盘可能已经被外部改过，直接返回等于「打开成功」但内容
+                # 是旧的，用户会以为磁盘没变。先比一次磁盘签名。
+                记录 = getattr(d, "_磁盘签名", None)
+                现在 = self._取磁盘签名(d.文件路径)
+                if 记录 is not None and 现在 is not None and 现在 != 记录:
+                    答 = self._问磁盘已变(d)
+                    if 答 == "reload":
+                        self._重新加载(d, d.文件路径)
+                    elif 答 == "cancel":
+                        self.状态("保持原样（磁盘上的文件已修改）")
+                    # "keep" → 保持编辑器里的内容不动
+                elif 记录 is not None and 现在 is None:
+                    # 文件已经被删/改名了，标签还挂着旧路径
+                    self.状态("文件已不存在：%s（标签里仍是打开时的内容）"
+                            % os.path.basename(d.文件路径))
                 return d
         if not os.path.isfile(路径):
             self.状态("文件不存在：%s" % 路径)
@@ -1304,6 +1947,7 @@ class 主窗(QMainWindow):
         # 记住这个文件原本是什么编码，保存时按它写回（见 编辑器.编码）。
         编.编码 = 编码
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
+        编._磁盘签名 = self._取磁盘签名(编.文件路径)
         编.hide()
         self.文档集.append(编)
         self.标签栏.addTab(self._文件名(编))
@@ -1318,6 +1962,40 @@ class 主窗(QMainWindow):
             return False
         if not 编.文件路径:
             return self.另存为(编)
+        # **保存前先看磁盘有没有被别人改过**（P1-5）。
+        #
+        # 以前这里直接开写：用户在别的编辑器里改过同一个文件，
+        # 回来在核工坊里敲一个字再保存，磁盘上的那份就没了 ——
+        # 没有任何提示，也没有任何痕迹。
+        # 打开/上次保存时记过 (mtime_ns, 大小)，这里比一次。
+        #
+        # `弹窗=False` 的那几条路（关机保存、批量收尾）问不了用户，
+        # 但更不能丢用户的改动，所以照写；交互保存一律先问。
+        磁盘记录 = getattr(编, "_磁盘签名", None)
+        现在签名 = self._取磁盘签名(编.文件路径)
+        if 弹窗 and 磁盘记录 is not None:
+            if 现在签名 is None:
+                # 文件被**删掉或改名**了（P1-4）。
+                #
+                # 以前这里只比「两边签名都非 None」的情况，文件消失时
+                # 现在签名=None 直接把整段比较跳过 → Ctrl+S 一声不响地
+                # 在原路径上重新建出这个文件。用户以为自己保存了原本那份，
+                # 其实是在给一个「已被删掉的文件」凭空复活。
+                答 = self._问文件已消失(编)
+                if 答 == "cancel":
+                    self.状态("保存已取消（原文件已不存在）")
+                    return False
+                if 答 == "saveas":
+                    return self.另存为(编)
+                # "recreate" → 继续往下写（会在原路径重新创建）
+            elif 现在签名 != 磁盘记录:
+                答 = self._问覆盖外部修改(编)
+                if 答 == "cancel":
+                    self.状态("保存已取消（磁盘上的文件已被外部修改）")
+                    return False
+                if 答 == "saveas":
+                    return self.另存为(编)
+                # "overwrite" → 继续往下写
         try:
             目录 = os.path.dirname(编.文件路径)
             if 目录 and not os.path.isdir(目录):
@@ -1369,6 +2047,15 @@ class 主窗(QMainWindow):
                 QMessageBox.warning(self, "保存失败", str(e))
             return False
         编.已改 = False
+        # 同步清掉文档的 modified 位：不清的话，下一次自动高亮/重排
+        # 会让 _文本变化 以为「内容又变了」，把刚存好的文档重新标成已改。
+        try:
+            编.document().setModified(False)
+        except (AttributeError, RuntimeError):
+            pass
+        # 保存完把磁盘签名刷新成「刚写下去的这一份」——
+        # 不刷新的话下一次保存会把这次自己的写入误判成「外部修改」。
+        编._磁盘签名 = self._取磁盘签名(编.文件路径)
         self.刷新标签(编)
         self._刷新标题()
         self.状态("已保存 %s" % os.path.basename(编.文件路径))
@@ -1409,16 +2096,32 @@ class 主窗(QMainWindow):
             )
             self.状态("保存失败：目标是文件夹")
             return False
+        # **目标是另一个已经打开的标签 → 直接拒绝**（P1-4）。
+        #
+        # 甲、乙两个文件都开着，把甲「另存为」到乙的路径并确认覆盖之后：
+        # 磁盘上乙变成了甲的内容，可乙的标签里还显示着**旧内容**、已改=False。
+        # 用户接着在那个标签里编辑保存，就把甲刚写进去的又盖掉了 ——
+        # 磁盘和标签从这一刻起各说各话，谁也不知道最终内容是哪份。
+        # 覆盖是破坏性的，这里不静默处理，也不自作主张切换标签。
+        占了 = self._另一个标签占了这路径(路径, 排除=编)
+        if 占了 is not None:
+            QMessageBox.warning(
+                self, "保存失败",
+                "「%s」已经在另一个标签里打开了。\n\n"
+                "同时写同一个文件会让磁盘和标签对不上 ——\n"
+                "请先关掉那个标签，或换一个文件名。" % os.path.basename(路径),
+            )
+            self.状态("保存失败：目标文件已在另一个标签打开")
+            return False
         # 目标已经存在时，再确认一次。
         # 系统的「另存为」对话框一般会自己问「要不要覆盖」，但那依赖原生对话框
         # 的行为（Qt 用非原生实现时不问）。这里自己兜住底 ——
         # 覆盖是破坏性的，不该只靠对话框的实现细节。
         #
-        # 比较走 normcase：Windows 不区分大小写，"a.XHT" 与 "a.xht"
-        # 是同一个文件；直接字符串比较会判成「不同文件」，于是同一个
-        # 文件重存时跳过确认。tkinter 版也按同一口径修了。
+        # 比较走 abspath + normcase：Windows 不区分大小写，"a.XHT" 与 "a.xht"
+        # 是同一个文件；相对路径与绝对路径也必须判成同一个。
         同一文件 = bool(编.文件路径) and (
-            os.path.normcase(路径) == os.path.normcase(os.path.abspath(编.文件路径))
+            self._规范路径(路径) == self._规范路径(编.文件路径)
         )
         if os.path.exists(路径) and not 同一文件:
             答 = QMessageBox.question(
@@ -1428,6 +2131,9 @@ class 主窗(QMainWindow):
             if 答 != QMessageBox.Yes:
                 return False
         编.文件路径 = 路径
+        # 换了目标路径，旧的磁盘签名不再对应任何文件；
+        # 清掉它，免得下一次保存拿它去比新路径、误报「外部已修改」。
+        编._磁盘签名 = None
         ok = self.保存(编)
         if ok:
             self.刷新标签(编)
@@ -1436,8 +2142,17 @@ class 主窗(QMainWindow):
 
     # ================= 项目树 =================
 
-    def 装载项目树(self, 目录):
+    def 装载项目树(self, 目录, 记住=True):
+        """装载项目树。
+
+        `记住=True`（默认）：同时更新「持久配置里的项目目录」，下次启动还用它。
+        `记住=False`：只切本次会话看得见的树 —— 拖放走的这条路（P1-14）。
+        开关式菜单、设置里的「选择目录」、启动时都该用默认的 True，
+        因为那几处用户是明确要「换到这个项目」。
+        """
         self.项目目录 = 目录
+        if 记住:
+            self._持久项目目录 = 目录
         self.树.clear()
         from PySide6.QtWidgets import QFileIconProvider
 
@@ -1470,7 +2185,9 @@ class 主窗(QMainWindow):
                 子 = QTreeWidgetItem(节点, [条.name])
                 子.setIcon(0, 提供.icon(QFileIconProvider.Folder))
                 子.setData(0, Qt.UserRole, 条.path)
-                QTreeWidgetItem(子, ["…"])
+                # 占位项要打标记：它是「还没加载」的意思，不是真的有个文件叫 …
+                占 = QTreeWidgetItem(子, ["…"])
+                占.setData(0, Qt.UserRole + 1, "占位")
                 有内容 = True
             elif 条.name.endswith((".xht", ".py", ".txt", ".md", ".json")):
                 子 = QTreeWidgetItem(节点, [条.name])
@@ -1488,6 +2205,21 @@ class 主窗(QMainWindow):
             提示.setData(0, Qt.UserRole + 1, "占位")   # 标记：不可双击打开
             提示.setForeground(0, QBrush(QColor(self.主题["禁用文本"])))
 
+    def _展开树(self, 项):
+        """展开文件夹时按需加载子项（P2-19）。
+
+        只在「还挂着占位」时才填 —— 反复收起/展开不该重复扫描磁盘，
+        也不该把已经展开过的子项再插一遍（那会变成重复条目）。
+        """
+        if 项 is None:
+            return
+        路径 = 项.data(0, Qt.UserRole)
+        if not 路径 or not os.path.isdir(路径):
+            return
+        if 项.childCount() == 1 and 项.child(0).data(0, Qt.UserRole + 1) == "占位":
+            项.takeChild(0)
+            self._填目录(项, 路径)
+
     def _双击树(self, 项, _列):
         # 占位提示项（空目录说明 / 懒加载的「…」）不可双击打开。
         if 项.data(0, Qt.UserRole + 1) == "占位":
@@ -1496,9 +2228,7 @@ class 主窗(QMainWindow):
         if not 路径:
             return
         if os.path.isdir(路径):
-            if 项.childCount() == 1 and 项.child(0).text(0) == "…":
-                项.takeChild(0)
-                self._填目录(项, 路径)
+            self._展开树(项)
             项.setExpanded(True)
         elif os.path.isfile(路径):
             self.打开(路径)
@@ -2206,7 +2936,14 @@ class 主窗(QMainWindow):
         try:
             import 查找对话框
 
-            查找对话框.跳转对话框(self, self.当前).exec()
+            # exec() 之后必须回收（P2-26）。`X().exec()` 这种一行写法
+            # 拿不到对象，按 Esc 关掉、或者点「取消」之后，
+            # 这个 QDialog 只是隐藏并留在主窗的 children 里 ——
+            # 每按一次 Ctrl+G 漏一个，长会话里越积越多。
+            框 = 查找对话框.跳转对话框(self, self.当前)
+            框.setAttribute(Qt.WA_DeleteOnClose, True)
+            框.exec()
+            框.deleteLater()
         except Exception as e:  # noqa: BLE001
             self.状态("打不开跳转框：%s" % e)
 
@@ -2284,6 +3021,10 @@ class 主窗(QMainWindow):
     def 换主题(self, 名):
         self.主题 = 主题.取主题(名, self.主题)
         self.主题名 = self.主题["名"]
+        # 自绘复选框要用当前配色，换主题后必须同步（P2-24）
+        样式 = 安装控件样式()
+        if 样式 is not None:
+            样式.配色 = self.主题
         self._套样式()
         self._应用窗口外观()
         self._刷新图标()
@@ -2307,12 +3048,23 @@ class 主窗(QMainWindow):
         try:
             import 设置窗口Qt
 
-            设置窗口Qt.设置对话框(self).exec()
+            # 同 跳到行：exec() 完要把对话框收掉（P2-26）。
+            # 设置对话框尤其要收 —— 它带着预览状态（_设置预览中），
+            # 残留对象越多，越容易在退出时互相干扰。
+            框 = 设置窗口Qt.设置对话框(self)
+            框.setAttribute(Qt.WA_DeleteOnClose, True)
+            框.exec()
+            框.deleteLater()
         except Exception as e:  # noqa: BLE001
             self.状态("设置窗口打不开：%s" % e)
 
     def 状态(self, 文本):
-        self.状态左.setText(文本)
+        # 走 设全文：长文本由 省略标签 按可用宽度省略，全文进 tooltip。
+        设 = getattr(self.状态左, "设全文", None)
+        if 设 is not None:
+            设(文本)
+        else:
+            self.状态左.setText(文本)
 
     def 更新状态栏(self):
         编 = self.当前
@@ -2397,12 +3149,25 @@ class 主窗(QMainWindow):
             文件.addAction(self._加动作(文件, 名, 命令, 键=键))
 
         最近 = 文件.addMenu("最近打开")
+        # 只列**磁盘上真的还在**的路径（P2-27）。
+        # 配置里那份 self.最近 是跨会话累积的：临时文件被删、U 盘拔掉、
+        # 项目改名之后，那里的条目就成了死链接 —— 点开只会弹「文件不存在」。
+        # 这里顺手把失效项从内存里摘掉（下次 存配置 就落盘清理了），
+        # 并在菜单底部给一个明确的清理入口，不用用户自己去翻配置文件。
+        存活 = [p for p in self.最近 if isinstance(p, str) and os.path.isfile(p)]
+        失效数 = len(self.最近) - len(存活)
+        self.最近 = 存活
         for 路径 in self.最近[:10]:
-            if not os.path.isfile(路径):
-                continue
             最近.addAction(
                 self._加动作(最近, os.path.basename(路径), lambda p=路径: self.打开(p), 路径)
             )
+        if 失效数:
+            最近.addSeparator()
+            清 = QAction("清理失效项（%d 条）" % 失效数, 最近)
+            清.setEnabled(False)
+            最近.addAction(清)
+            if hasattr(self, "状态左"):
+                self.状态("已从「最近打开」里清理 %d 条失效路径" % 失效数)
         if not 最近.actions():
             空 = QAction("（空）", 最近)
             空.setEnabled(False)
@@ -2680,8 +3445,19 @@ class 主窗(QMainWindow):
             self.unsetCursor()
         super().mouseMoveEvent(事件)
 
-    def 存配置(self):
-        """把界面状态写盘，下次启动还原。"""
+    def 存配置(self, 强制=False):
+        """把界面状态写盘，下次启动还原。
+
+        **设置窗口预览期间不写盘**（P1-6）。
+        设字号 / 设制表宽 / 设行号 / 设缩进线 / 设自动高亮 每个都会调到这里，
+        而它们正是设置窗口里每动一下就调的预览入口：拖动字号滑条一次
+        就写一次盘。等用户按「取消」，磁盘上早已是一串预览过的值 ——
+        程序崩一次、或者还原逻辑漏了某一项，设置就被永久改掉了。
+        现在预览只改内存，落盘统一在 应用 / 确定 / 取消 里做（那时它们
+        会先把 _设置预览中 复位）。
+        """
+        if getattr(self, "_设置预览中", False) and not 强制:
+            return
         self.配置.update({
             "主题": self.主题名,
             "字号": self.字号,
@@ -2690,7 +3466,12 @@ class 主窗(QMainWindow):
             "行号": self.显示行号,
             "自动高亮": self.自动高亮,
             "最近": self.最近[:12],
-            "项目目录": self.项目目录,
+            # **写持久值，不写会话值**（P1-14）。
+            # 拖一个文件夹进来只是想看看，self.项目目录 变成了它，
+            # 但「下次启动打开哪个项目」不该因此改变。以前这里写
+            # self.项目目录，于是下一次 存配置（退出、改字号、应用设置）
+            # 就把临时拖进来的目录永久写死了 —— 用户完全没被告知。
+            "项目目录": getattr(self, "_持久项目目录", self.项目目录),
             "窗口尺寸": "%dx%d" % (self.width(), self.height()),
             "窗口位置": "%d,%d" % (self.x(), self.y()),
         })
@@ -2783,6 +3564,14 @@ class 主窗(QMainWindow):
         # 那时版本状态就再也不刷新了（实测「取消」后 查() 被 _停 挡掉，
         # 顶行版本号与保存后的刷新全部失效）。真正停线程放到 _真正关窗。
         事件.accept()
+        # 关之前先把窗口状态拍下来：用户随时可能点「取消」，
+        # 那时要按原样还原（P3-3）。必须在这里拍 —— accept() 之后
+        # isMaximized() 就不可靠了。
+        self._关窗窗口状态 = (
+            "fullscreen" if self.isFullScreen()
+            else "maximized" if self.isMaximized()
+            else "normal"
+        )
         self._收尾退出(真退出=False)
         if getattr(self, "_关窗确认中", False):
             return          # 已经在问了，别再弹第二个
@@ -2827,13 +3616,28 @@ class 主窗(QMainWindow):
         框.setIcon(QMessageBox.Question)
         框.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
         框.setDefaultButton(QMessageBox.Save)
+        # Esc 必须落到「取消」。不设的话，平台默认可能是「不保存」——
+        # 用户按 Esc 想反悔，结果改动被丢掉。
+        框.setEscapeButton(QMessageBox.Cancel)
         框.button(QMessageBox.Save).setText("保存")
         框.button(QMessageBox.Discard).setText("不保存")
         框.button(QMessageBox.Cancel).setText("取消")
 
         def 拉回来():
-            """用户反悔了 —— 把窗口重新显示出来。"""
-            self.showNormal()
+            """用户反悔了 —— 把窗口重新显示出来，**并恢复原来的窗口状态**。
+
+            以前固定 showNormal()：关窗前窗口是最大化（甚至全屏）的，
+            点「取消」之后变成一个普通大小的窗口，布局、滚动位置、
+            面板宽度全都变了样 —— 用户只是不想关，不是想把窗口缩小（P3-3）。
+            状态在 closeEvent 里就拍下来了（_关窗窗口状态），这里照着还原。
+            """
+            状态 = getattr(self, "_关窗窗口状态", "normal")
+            if 状态 == "fullscreen":
+                self.showFullScreen()
+            elif 状态 == "maximized":
+                self.showMaximized()
+            else:
+                self.showNormal()
             self.raise_()
             self.activateWindow()
 
@@ -2849,10 +3653,14 @@ class 主窗(QMainWindow):
             交班 = False
             框.deleteLater()
             try:
-                if 答 == QMessageBox.Cancel:
+                # X / Esc 会让 finished 拿到 NoButton(0)。必须按「取消」处理：
+                # 老写法只判 `答 == QMessageBox.Cancel`，0 不等于 Cancel，
+                # 于是落进下面「这一份问过了」的分支 —— 窗口关掉、改动丢失。
+                判定 = _判定保存答复(答)
+                if 判定 == "cancel":
                     拉回来()
                     return
-                if _还活着(编) and 答 == QMessageBox.Save and not self.保存(编):
+                if _还活着(编) and 判定 == "save" and not self.保存(编):
                     拉回来()
                     return
                 # 这一份问过了（保存了 / 放弃了 / 它已经不在了）→ 出队，
@@ -2923,20 +3731,16 @@ class 主窗(QMainWindow):
         self.activateWindow()
 
     def _装载项目树不存配置(self, 目录):
-        """装载项目树，但**不**把项目目录写进配置。
+        """装载项目树，但**不**把项目目录变成持久设置（拖放专用，P1-14）。
 
-        给拖放用：拖进来的文件夹只是「看一下」，不该变成永久设置。
-        做法是装载之后把配置里的项目目录还原回装载前的值 ——
-        比给 装载项目树 加一个开关参数更省事，也不用动那条例行路径
-        （打包自检、菜单、设置窗口都走原来的 装载项目树）。
+        旧实现是「装载之后把 配置["项目目录"] 还原回装载前的值」。
+        那治不了根：装载项目树 已经把 `self.项目目录` 改成了新目录，
+        而 存配置() 写盘用的是 `self.项目目录` —— 下一次存配置
+        （退出、改字号、应用设置）照样把临时目录写死了。
+        现在拆成两个字段：会话值 `self.项目目录`（只影响本次显示）、
+        持久值 `self._持久项目目录`（只有它进配置文件）。
         """
-        旧 = self.配置.get("项目目录")
-        self.装载项目树(目录)
-        if 旧 is not None:
-            self.配置["项目目录"] = 旧
-        else:
-            self.配置.pop("项目目录", None)
-        配置.存配置(self.配置)
+        self.装载项目树(目录, 记住=False)
 
 
 def 启动(参数=None):

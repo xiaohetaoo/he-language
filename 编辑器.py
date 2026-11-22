@@ -384,7 +384,13 @@ class 行号区(QWidget):
             号 += 1
 
     def _画折叠三角(self, 绘, 块, 顶, 高, 色):
-        """在行号左侧画折叠三角：展开是 ▼，已折叠是 ▶。"""
+        """在行号左侧画折叠三角：展开是 ▼，已折叠是 ▶。
+
+        **尺寸随行高缩放**（P2-24）。以前三角写死 7×6 像素：
+        12 号字下勉强能看，把字号拉到 40 时行高 56px，
+        那个小三角缩在行的正中间，既看不清也不好点。
+        现在按行高的 22% 算半宽，夹在 [3, 折叠栏宽-4] 之内。
+        """
         展开 = not self.编辑器.已折叠(块)
         色键 = "行号字"
         if 块.blockNumber() == self._悬停块:
@@ -392,15 +398,20 @@ class 行号区(QWidget):
         绘.setPen(Qt.NoPen)
         绘.setBrush(QColor(色.get(色键, 色["行号字"])))
         中 = 顶 + 高 // 2
+        半 = max(3, min(int(高 * 0.22), max(3, self.折叠栏宽 - 4)))
+        横 = 半 * 2          # 横向占的格数
+        左 = max(2, (self.折叠栏宽 - 横) // 2)
         if 展开:
             # ▼ 向下的三角
             绘.drawPolygon([
-                QPoint(4, 中 - 3), QPoint(11, 中 - 3), QPoint(7, 中 + 3),
+                QPoint(左, 中 - 半), QPoint(左 + 横, 中 - 半),
+                QPoint(左 + 横 // 2, 中 + 半),
             ])
         else:
             # ▶ 向右的三角
             绘.drawPolygon([
-                QPoint(5, 中 - 4), QPoint(5, 中 + 4), QPoint(12, 中),
+                QPoint(左, 中 - 半), QPoint(左, 中 + 半),
+                QPoint(左 + 横, 中),
             ])
         绘.setBrush(Qt.NoBrush)
 
@@ -701,6 +712,15 @@ class 编辑器(QPlainTextEdit):
         号 = 块.blockNumber()
         return 表[号] if 0 <= 号 < len(表) else None
 
+    def _串态标脏(self, 块号):
+        """标记「从第 块号 块起，串态缓存可能已经不对了」。
+
+        只记**最早**的那个脏点：一次改动可能连带标脏多次（内容变化、
+        换行增删各走一遍），取最小值才不会漏掉更靠前的那一段。
+        """
+        脏 = getattr(self, "_串态脏起", None)
+        self._串态脏起 = 块号 if 脏 is None else min(脏, 块号)
+
     def _串态表(self):
         """「每块开头所处的三引号」列表，按需重算并缓存。
 
@@ -714,6 +734,14 @@ class 编辑器(QPlainTextEdit):
           · 块数没变（改动只是在某一行内部增删字符）→
             从改动所在块的**前一块**末态起算，只重算后面那一段；
           · 块数变了（增删了换行）→ 全量重算。
+
+        **再加一道「有效水位」**（P1-3）：算完之后把 `_串态脏起` 清成 None，
+        表示整张表都还有效；下一次调用只要没再标脏就直接返回，不再扫。
+        没有这一条时，每调用一次都会从 `_编辑块` 重扫到文末 ——
+        而 `全部折叠()` 要对**每一块**调 `可折叠()`（→ 折叠区 → _起始串
+        → 本函数），n 块就是 n 次全文扫描，合起来 O(n²)。实测
+        500/1000/2000/4000 行分别 1.79s / 7.21s / 29.50s / 121.31s，
+        8000 行超过 10 分钟。加上水位后是一趟 O(n)。
         """
         文档 = self.document()
         块数 = 文档.blockCount()
@@ -724,9 +752,13 @@ class 编辑器(QPlainTextEdit):
             表 = [None] * 块数
             起号 = 0
         else:
+            脏起 = getattr(self, "_串态脏起", None)
+            if 脏起 is None:
+                # 上次算完之后没有任何改动：整张表都还有效，直接返回。
+                # 这是 全部折叠 从 O(n²) 降到 O(n) 的关键一步。
+                return 表
             # 块数没变：改动点之前的状态不会变，从它所在块的前一块起算。
-            改动块 = getattr(self, "_编辑块", 0)
-            起号 = max(0, min(改动块, 块数 - 1))
+            起号 = max(0, min(脏起, 块数 - 1))
         self._串态缓存 = 表
 
         # 「起号 这一块开头所处的引号」= 前一块扫完时的未闭合引号。
@@ -742,6 +774,8 @@ class 编辑器(QPlainTextEdit):
             # 复用内核扫描器：与翻译器、高亮器同一套口径。
             _, _, 起始 = 核.扫描行(块.text(), 起始)
             块 = 块.next()
+        # 扫完了：整表有效。下一次调用（以及后面 n-1 次）直接命中缓存。
+        self._串态脏起 = None
         return 表
 
 
@@ -753,21 +787,33 @@ class 编辑器(QPlainTextEdit):
         return len(文本) - len(剥)
 
     @staticmethod
-    def 是块开头(文本):
+    def 是块开头(文本, 起始引号=None):
         """这一行是不是一个块的开头（以冒号结尾）。
 
         判定口径统一走 核.扫描行：先切掉行尾注释，再看最后一个有效字符
         是不是冒号。之前是 剥.find("核核") 直接切 —— 既不认「核核紧贴」
         的边界规则，也会把字符串里的「核核」当注释开头，和翻译器说法不同；
         而且字符串里的冒号（核说("a:")）会被误判成块开头。
+
+        **`起始引号` 必须传进来**（P1-11）。一行若从一开始就处在某个
+        三引号串内部（上一行开了没关），那么整行都是字符串内容：
+        里面以冒号结尾的行（`注意：`、docstring 里的小标题）本来只是文字，
+        以前会被判成折叠头 —— 折叠一把就把字符串内容藏了，
+        回车也会在那行后面多插一级缩进（`_自动缩进` 用的是同一个判定）。
+        扫描行 的 `起始引号` 参数本来就是干这个的，这里接上即可。
         """
-        串区, 注释起, _ = 核.扫描行(文本)
+        串区, 注释起, _ = 核.扫描行(文本, 起始引号)
         剥 = 文本[:注释起] if 注释起 >= 0 else 文本
         剥 = 剥.rstrip()
         if not 剥:
             return False
         位 = len(剥) - 1
         if any(起 <= 位 < 止 for 起, 止 in 串区):
+            return False
+        # 整行都在字符串里时，冒号只是字符串内容（扫描行 会把整行划进串区，
+        # 上面那条 any 已经处理；这里再挡一次「行首已处于串内」的退化情形，
+        # 比如行首是串内容、行尾恰好是收尾引号 + 冒号）。
+        if 起始引号 is not None and not 串区:
             return False
         return 剥.endswith("：") or 剥.endswith(":")
 
@@ -782,8 +828,10 @@ class 编辑器(QPlainTextEdit):
             return None
         文本 = 块.text()
 
-        # 冒号块优先：`核定义 f()：` 这种既不是跨行括号，也该走缩进规则
-        if self.是块开头(文本):
+        # 冒号块优先：`核定义 f()：` 这种既不是跨行括号，也该走缩进规则。
+        # 传 _起始串(块)：这一块若从三引号串内部开始，整行都是字符串内容，
+        # 里面以冒号结尾的行不该变成折叠头（P1-11）。
+        if self.是块开头(文本, self._起始串(块)):
             return self._冒号块区(块, 文本)
 
         # 三引号串其次：字符串里的括号/冒号都不是代码，必须排在括号块前面
@@ -1062,6 +1110,9 @@ class 编辑器(QPlainTextEdit):
             游.movePosition(QTextCursor.End)
             self.setTextCursor(游)
             self.应用折叠()
+            # 文末那一块本身也可能被折起来（文件末尾没有换行时尤其常见），
+            # 那样光标就停在隐藏块上了（P1-16）——再挪到最近的可见块。
+            self._挪到可见块()
             self.行号.update()
             self.viewport().update()
 
@@ -1220,22 +1271,69 @@ class 编辑器(QPlainTextEdit):
             self._展开含此块的折叠(块.blockNumber())
 
     def _展开含此块的折叠(self, 行号):
-        """把「覆盖了这一行」的那个折叠展开。"""
-        块 = self.document().firstBlock()
-        while 块.isValid():
-            数据 = 块.userData()
-            if (
-                数据 is not None
-                and getattr(数据, "折叠", False)
-                and 块.blockNumber() < 行号
-            ):
-                止 = self.折叠区(块)
-                if 止 is not None and 行号 <= 止:
-                    数据.折叠 = False
-                    self.应用折叠()
-                    self.行号.update()
-                    return
-            块 = 块.next()
+        """把**所有**覆盖了这一行的折叠都展开（P1-16）。
+
+        折叠可以嵌套：先折内层、再折外层，光标落到内层那些行上时，
+        只展开第一个覆盖它的折叠是不够的 —— 外层展开之后内层仍然折着，
+        目标行还是看不见，光标停在不可见行上。
+
+        以前这里 `return` 在第一个命中的折叠上。现在一直展开到
+        「这一行在所有折叠之外」为止；展开会互相影响（外层展开后
+        内层的 折叠区 才会被重新计算），所以每展开一个就重新扫一遍。
+        """
+        安全 = 0
+        while 安全 < 64:
+            安全 += 1
+            展开了一个 = False
+            块 = self.document().firstBlock()
+            while 块.isValid():
+                数据 = 块.userData()
+                if (
+                    数据 is not None
+                    and getattr(数据, "折叠", False)
+                    and 块.blockNumber() < 行号
+                ):
+                    止 = self.折叠区(块)
+                    if 止 is not None and 行号 <= 止:
+                        数据.折叠 = False
+                        self.应用折叠()
+                        self.行号.update()
+                        展开了一个 = True
+                        break
+                块 = 块.next()
+            if not 展开了一个:
+                return
+
+    def _挪到可见块(self):
+        """把光标挪到最近的可见块上（P1-16）。
+
+        全部折叠 之后，文末的最后一块可能正好被折起来 —— 以前是把光标
+        移到 `End`，于是停在一个**看不见的行**上：用户接着打字，
+        字打进了被折叠的区域，屏幕上什么也看不到。
+        """
+        可见表 = getattr(self, "_可见表", None)
+        文档 = self.document()
+        if not 可见表 or len(可见表) != 文档.blockCount():
+            return
+        游 = self.textCursor()
+        号 = 游.blockNumber()
+        if 0 <= 号 < len(可见表) and 可见表[号]:
+            return
+        # 往上找最近的可见块；找不到就往下找；都没有就回文首
+        目标 = None
+        for i in range(号, -1, -1):
+            if 可见表[i]:
+                目标 = i
+                break
+        if 目标 is None:
+            for i in range(号, len(可见表)):
+                if 可见表[i]:
+                    目标 = i
+                    break
+        if 目标 is None:
+            目标 = 0
+        新 = QTextCursor(文档.findBlockByNumber(目标))
+        self.setTextCursor(新)
 
     def _文本变化(self):
         """文本变了。这里只做最轻的记账，重的 UI 更新一律延后。
@@ -1253,7 +1351,12 @@ class 编辑器(QPlainTextEdit):
         self._编辑位置 = min(游.position(), 游.anchor())
         # 同时记住「改在哪一块」：_串态表 靠它做增量重算 ——
         # 这一块之前的行状态不会变，只需要从它所在块的前一块往后重扫。
+        #
+        # 仅仅记下 `_编辑块` 是不够的：`_串态表` 以前每被调用一次就无条件
+        # 重扫一遍，而 全部折叠 会对每一块都调它一次（P1-3，O(n²)）。
+        # 现在必须显式标脏，扫完一趟就把脏标记清掉，重复调用才真正命中缓存。
         self._编辑块 = 游.blockNumber()
+        self._串态标脏(self._编辑块)
         # 有折叠时才重算可见性：折叠标记挂在块上，
         # 编辑之后块的相对关系会变（缩进改了、冒号删了），
         # 必须重新算一遍「哪些块该藏起来」。没有折叠就完全跳过 ——
@@ -1266,7 +1369,18 @@ class 编辑器(QPlainTextEdit):
         if getattr(self, "_折叠数", 0):
             self.应用折叠()
             self.行号.update()
-        if not self.已改:
+        # **只有文档真的被改过才算「已改」**。
+        #
+        # 以前这里无条件 `self.已改 = True`。而 contentsChanged 并不只在
+        # 用户打字时发：`高亮.rehighlight()`（切换「自动语法高亮」）、
+        # 改制表宽、换主题都会让它发一次。于是「在设置里关掉语法高亮」
+        # 会把**所有打开的文档**标成已修改：
+        #   · 标题栏冒出一堆 ●；
+        #   · 关窗口/关标签时挨个问「要保存吗」；
+        #   · 自动保存流程还会把这些没动过的文件重新写一遍。
+        # QTextDocument 自己分得清「内容变了」和「只是重新排版」——
+        # 用它的 isModified() 当依据。
+        if not self.已改 and self.document().isModified():
             self.已改 = True
             self.主窗.刷新标签(self)
         # 去抖调度（_排重界面刷新 由编辑器构造时创建）
@@ -1391,6 +1505,66 @@ class 编辑器(QPlainTextEdit):
         "（": "）", "【": "】", "｛": "｝",
     }
 
+    #: 自动配对插入的「右半边」在字符格式上的标记键。
+    #:
+    #: 为什么用字符格式而不是记位置：位置会被后续编辑推移，
+    #: 自己维护一套偏移表迟早对不上。字符格式跟着字符走，Qt 负责搬移。
+    _配对标记 = QTextFormat.UserProperty + 0x5A17
+
+    def _在串或注释里(self, 游=None):
+        """光标是不是落在字符串或注释内部（P1-12）。
+
+        在里面就不该做自动配对：`甲 = "abc"` 光标停在开头引号后面时
+        再按一个双引号，以前会配出一对引号、把单个字符串变成**三引号串**
+        —— 一个合法但完全不是用户想要的写法。注释里同理，插一对括号纯属捣乱。
+
+        **一个例外**：光标正好夹在一对**空串**之间（刚由自动配对生成
+        `''`／`""`，光标在中间）时仍然允许配对。那是「刚打开一个字符串」
+        的状态，此时再按引号应当再来一对、而不是只塞一个字符 ——
+        回归里的 `ab'"'` 用例就是这么断言的，也确实更合手。
+        """
+        游 = 游 or self.textCursor()
+        块 = 游.block()
+        串区, 注释起, _ = 核.扫描行(块.text(), self._起始串(块))
+        列 = 游.positionInBlock()
+        if 注释起 is not None and 注释起 >= 0 and 列 >= 注释起:
+            return True
+        for 起, 止 in 串区:
+            if 起 <= 列 < 止:
+                # 空串例外：起+1 == 列 == 止-1 表示这对引号之间什么都没有
+                if 列 == 起 + 1 and 止 == 列 + 1:
+                    return False
+                return True
+        return False
+
+    def _右字符是自动配对的(self, 游):
+        """判「光标右边那个字符是编辑器自己插的配对另一半」。
+
+        退格时**只有**确认这一对是编辑器插的，才把两个字符一起删掉。
+        以前无条件删：`甲 = "a""b"` 两个引号之间按退格会把两边都删掉，
+        变成 `甲 = "ab"` —— 用户什么也没想改，两个字符串却被合并了。
+        """
+        探 = QTextCursor(self.document())
+        探.setPosition(游.position())
+        探.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor)
+        if not 探.hasSelection():
+            return False
+        return 探.charFormat().property(self._配对标记) == 1
+
+    def _插入行中缩进(self):
+        """行中按 Tab：在光标处补到下一个制表位，**不整行缩进**（P1-12）。
+
+        以前 Tab 一律走 _缩进选中行：光标停在 `甲 = 1` 的第 2 列按 Tab，
+        整行被推到 `    甲 = 1`，缩进加在了行首、光标跳到 6 ——
+        用户想要的是「在这里空一格」，得到的是整行位移。
+        """
+        游 = self.textCursor()
+        列 = 游.positionInBlock()
+        宽 = max(1, int(getattr(self, "制表宽", 4) or 4))
+        补 = 宽 - (列 % 宽)
+        游.insertText(" " * 补)
+        self.setTextCursor(游)
+
     def keyPressEvent(self, 事件: QKeyEvent):
         键 = 事件.key()
         文本 = 事件.text()
@@ -1399,7 +1573,13 @@ class 编辑器(QPlainTextEdit):
             self._自动缩进(事件)
             return
         if 键 == Qt.Key_Tab:
-            self._缩进选中行(1)
+            # 有选区 → 整块缩进（原来的行为）；行首 → 整行缩进；
+            # 行中且无选区 → 只在光标处补空格。
+            游 = self.textCursor()
+            if 游.hasSelection() or 游.positionInBlock() == 0:
+                self._缩进选中行(1)
+            else:
+                self._插入行中缩进()
             return
         if 键 == Qt.Key_Backtab:
             self._缩进选中行(-1)
@@ -1409,6 +1589,12 @@ class 编辑器(QPlainTextEdit):
         # 若这里抢先生成一对英文引号并 return，输入法就收不到这次按键，
         # 用户会觉得「标点被吞了、打不出来」。
         组字中 = self._输入法组字中()
+        # 在字符串 / 注释里不做**插入配对**：插进去的那一半只是多出来的字符，
+        # 还会把本来正确的引号结构改成三引号串（P1-12）。
+        #
+        # 注意只禁「插入」，不禁「跳过已有的右半边」—— 后者只是移光标、
+        # 不产生任何字符，禁掉的话正常打 `核说("你好")` 收尾时会多插一个引号。
+        在串里 = (not 组字中) and self._在串或注释里()
         # 「右邻已经是配对的另一半」时直接跳过，不再插一对。
         #
         # 这一步必须排在自动配对**之前**，而且对引号同样适用。
@@ -1426,14 +1612,6 @@ class 编辑器(QPlainTextEdit):
                     游.movePosition(QTextCursor.Right)
                     self.setTextCursor(游)
                     return
-        if 文本 in self.配对表 and self._无配对外修饰(事件) and not 组字中:
-            self._自动配对(文本, self.配对表[文本])
-            return
-        if 组字中 and 文本 in self.配对表:
-            # 组字期间这类按键交给输入法决定（它会把 ' 变成 ’ 之类），
-            # 自己不能再插一个字符，否则上屏后多出个引号。
-            事件.accept()
-            return
         # 输入右括号时，若紧邻的正是它，直接跳过（不重复插入）
         if 文本 and 文本 in self.配对表.values() and not 组字中 and self._无配对外修饰(事件):
             游 = self.textCursor()
@@ -1441,8 +1619,17 @@ class 编辑器(QPlainTextEdit):
                 游.movePosition(QTextCursor.Right)
                 self.setTextCursor(游)
                 return
-        # 按退格删除成对符号时，把另一半也删掉
-        if 键 == Qt.Key_Backspace:
+        if 文本 in self.配对表 and self._无配对外修饰(事件) and not 组字中 and not 在串里:
+            self._自动配对(文本, self.配对表[文本])
+            return
+        if 组字中 and 文本 in self.配对表:
+            # 组字期间这类按键交给输入法决定（它会把 ' 变成 ’ 之类），
+            # 自己不能再插一个字符，否则上屏后多出个引号。
+            事件.accept()
+            return
+        # 按退格删除成对符号时，把另一半也删掉 —— 但**只限编辑器自己插的**
+        # 那一半（P1-12），否则会把用户自己写的两个相邻字符串吃掉一半。
+        if 键 == Qt.Key_Backspace and not self._在串或注释里():
             游 = self.textCursor()
             if not 游.hasSelection():
                 行 = 游.block().text()
@@ -1450,7 +1637,7 @@ class 编辑器(QPlainTextEdit):
                 if 列 > 0 and 列 < len(行):
                     左 = 行[列 - 1]
                     右 = 行[列]
-                    if self.配对表.get(左) == 右:
+                    if self.配对表.get(左) == 右 and self._右字符是自动配对的(游):
                         # 用文档游标删掉这两个字符，位置从「列-1」到「列+1」
                         起 = 游.position() - 1
                         止 = 游.position() + 1
@@ -1494,7 +1681,13 @@ class 编辑器(QPlainTextEdit):
             新.setPosition(止 + 1, QTextCursor.KeepAnchor)
             self.setTextCursor(新)
             return
-        游.insertText(左 + 右)
+        # 右半边带上「这是编辑器插的」标记，退格时靠它判断能不能连左半边一起删。
+        # 标记只打在**右边**：打左边的话，用户在括号里继续输入时
+        # 新字符会从左边继承格式，标记就污染到正常文字上了。
+        标记 = QTextCharFormat()
+        标记.setProperty(self._配对标记, 1)
+        游.insertText(左)
+        游.insertText(右, 标记)
         游.movePosition(QTextCursor.Left)
         self.setTextCursor(游)
 
@@ -1520,7 +1713,13 @@ class 编辑器(QPlainTextEdit):
         # 前缀 = 这一行开头连续的空白字符（半角空格 / 制表符 / 全角空格），
         # 原样保留：半角还是半角、全角还是全角、制表符还是制表符。
         前缀 = 行文[: len(行文) - len(行文.lstrip(" \t\u3000"))]
-        额外 = " " * self.制表宽 if self.是块开头(行文) else ""
+        # 块开头判定要带上「这一块开头是不是已经在三引号串里」（P1-11）：
+        # 字符串内部的行不是代码，不该在回车时多缩一级。
+        额外 = (
+            " " * self.制表宽
+            if self.是块开头(行文, self._起始串(光标.block()))
+            else ""
+        )
         缩进 = 前缀 + 额外
         super().keyPressEvent(事件)
         if 缩进:
@@ -1834,9 +2033,17 @@ class 编辑器(QPlainTextEdit):
         # 前面那些块继续用旧内容的引号结论 —— 表现为折叠区错乱、
         # 或本该能折的三引号串折不了（反之亦然）。
         self._串态缓存 = None
+        # 缓存整份作废：脏起也要一起复位，否则下一趟会拿旧的脏点当起点
+        # （水位机制下「脏起=None」表示整表有效，必须先标成全脏）。
+        self._串态脏起 = 0
         self._编辑块 = 0
         self.应用折叠()
         self.已改 = bool(标记已改)
+        # 文档的 modified 位要跟 已改 对齐：_文本变化 靠 isModified()
+        # 区分「用户改了内容」和「只是重新高亮/重排」，
+        # 如果整份文本换掉之后 modified 还停在 True，后面任何一次
+        # 自动高亮都会把这份新载入的文档又标成已改。
+        self.document().setModified(bool(标记已改))
         if hasattr(self, "主窗") and self.主窗 is not None:
             self.主窗.刷新标签(self)
             if self.已改 and self.主窗.当前 is self:

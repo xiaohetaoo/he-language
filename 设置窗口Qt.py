@@ -29,6 +29,8 @@ class 设置对话框(QDialog):
         super().__init__(主窗)
         self.主窗 = 主窗
         self.结果 = False
+        #: 用户点过「应用」没有 —— 点过之后 Esc 只撤销应用之后的改动（P1-3）
+        self._已应用过 = False
         # 记住打开时的状态，供「取消」还原
         self.原始 = {
             "主题名": 主窗.主题名,
@@ -56,6 +58,45 @@ class 设置对话框(QDialog):
 
         self._建界面()
         self._同步箭头色()
+        # 打开设置后进入「预览模式」：这一期间的所有开关改动都**只改内存、
+        # 不写盘**（P1-6）。以前 设字号/设制表宽/设行号/设缩进线/设自动高亮
+        # 每一个都自己 存配置()，拖动字号滑条就会把磁盘写了一串；
+        # 用户按「取消」时磁盘上已经是被预览值覆盖过的状态了。
+        self._开始预览()
+
+    # —— 预览模式（P1-6）——
+
+    def _开始预览(self):
+        主窗 = getattr(self, "主窗", None)
+        if 主窗 is not None:
+            主窗._设置预览中 = True
+
+    def _结束预览(self):
+        主窗 = getattr(self, "主窗", None)
+        if 主窗 is not None:
+            主窗._设置预览中 = False
+
+    def reject(self):
+        """Esc / 对话框默认的「拒绝」必须走 取消()（P1-6）。
+
+        QDialog 默认的 reject() 只是关掉对话框：不加这一条，
+        用户把字号拖到 30、等预览生效、再按 Esc —— 主窗字号停在 30、
+        磁盘配置也是 30，可界面上什么都没提示，用户以为已经取消了。
+        """
+        self.取消()
+
+    def closeEvent(self, 事件):
+        """点标题栏 X 也必须走 取消()（P1-6）。
+
+        同 reject()：默认 closeEvent 只接受关闭事件，不还原任何预览改动。
+        """
+        # 已经在 取消/确定 里走完了流程就别再跑一遍（那会把刚应用的值
+        # 又还原回去）。
+        if getattr(self, "_已收尾", False):
+            事件.accept()
+            return
+        self._已收尾 = True
+        self.取消()
 
     def _建界面(self):
         外层 = QHBoxLayout(self)
@@ -168,7 +209,7 @@ class 设置对话框(QDialog):
         self.字号条.sliderReleased.connect(self._字号松手)
         字号行.addWidget(self.字号条, 1)
         # 当前值单独显示，拖动时眼睛不用在刻度上找
-        self.字号标 = QLabel("%d pt" % self.字号条.value())
+        self.字号标 = QLabel("%d px" % self.字号条.value())
         self.字号标.setFixedWidth(52)
         self.字号标.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.字号标.setObjectName("sliderValue")
@@ -176,7 +217,7 @@ class 设置对话框(QDialog):
         布局.addLayout(字号行)
 
         字号范围 = QLabel(
-            "范围 %d–%d pt　·　代码区域的字号，行号栏会跟着缩放"
+            "范围 %d–%d px　·　代码区域的字号，行号栏会跟着缩放"
             % (主题.字号最小, 主题.字号最大)
         )
         字号范围.setObjectName("hintText")
@@ -364,7 +405,7 @@ class 设置对话框(QDialog):
         用 30ms 去抖把连续事件合成一次：拖动过程中最多每 30ms 应用一次，
         松手后立刻生效。标签是立刻更新的 —— 它只改一个数字，可以忽略。
         """
-        self.字号标.setText("%d pt" % 值)
+        self.字号标.setText("%d px" % 值)
         self._待应用字号 = int(值)
         任务 = getattr(self, "_字号任务", None)
         if 任务 is None:
@@ -437,10 +478,36 @@ class 设置对话框(QDialog):
         # 最后一次的值可能还躺在定时器里没生效。
         self._落实字号()
         self.结果 = True
+        self._已应用过 = True
+        # 提交这一次要真的落盘：先退出预览模式，写完之后再回去 ——
+        # 「应用」不关对话框，用户可能接着改。
+        self._结束预览()
         self.主窗.应用设置(保存=True)
         self.主窗.状态("设置已应用")
+        # **把基线推到当前值**（P1-3）。
+        #
+        # 不推的话：字号 12 → 拖到 30 → 点「应用」（已生效、已写盘）
+        # → 按 Esc，取消() 仍然按「打开设置时的 12」去还原，
+        # 于是刚提交的设置被无声撤销，磁盘也退回 12。
+        # 应用之后的新改动才算「未提交」，Esc 只该撤销那一部分。
+        self._记基线()
+        self._开始预览()
+
+    def _记基线(self):
+        """把「当前已提交的状态」记成新的还原基线（P1-3）。"""
+        主窗 = self.主窗
+        self.原始 = {
+            "主题名": 主窗.主题名,
+            "字号": 主窗.字号,
+            "制表宽": 主窗.制表宽,
+            "缩进线": bool(主窗.显示缩进线),
+            "行号": bool(主窗.显示行号),
+            "自动高亮": bool(主窗.自动高亮),
+            "项目目录": 主窗.项目目录,
+        }
 
     def 确定(self):
+        self._已收尾 = True
         self.应用()
         self.关闭()
 
@@ -449,7 +516,14 @@ class 设置对话框(QDialog):
 
         每一项都要还原：以前只还原了主题和字号，行号/缩进线/高亮
         留在被改过的状态，按「取消」等于没取消。
+
+        X / Esc / 取消按钮三条路径现在都汇到这里（reject / closeEvent
+        都转调本方法），所以还原逻辑只此一份。
         """
+        self._已收尾 = True
+        # 还原本身会调各个 设XXX，先退出预览模式，
+        # 最后那一次 应用设置(保存=True) 才能真的把**还原后的值**写盘。
+        self._结束预览()
         主窗 = self.主窗
         # 停掉字号去抖，否则还原之后定时器又把它改回去
         任务 = getattr(self, "_字号任务", None)
@@ -467,7 +541,7 @@ class 设置对话框(QDialog):
             条.blockSignals(False)
             标 = getattr(self, "字号标", None)
             if 标 is not None:
-                标.setText("%d pt" % 条.value())
+                标.setText("%d px" % 条.value())
         主窗.设制表宽(self.原始["制表宽"])
         主窗.设缩进线(self.原始["缩进线"])
         主窗.设行号(self.原始["行号"])
@@ -481,7 +555,8 @@ class 设置对话框(QDialog):
                 框.setText(self.原始["项目目录"])
         主窗.应用设置(保存=True)
         主窗.状态("设置已取消")
-        self.结果 = False
+        # 已经「应用」过的值不会被撤销，所以结果仍算「提交过」
+        self.结果 = bool(getattr(self, "_已应用过", False))
         self.关闭()
 
     def 关闭(self):
@@ -491,5 +566,8 @@ class 设置对话框(QDialog):
         在 exec() 的模态循环里可能让循环拿不到返回值、表现为卡住。
         先 close() 结束模态，再 deleteLater() 交给事件循环回收。
         """
+        # 任何一条关闭路径走完都要确定「预览模式」已经退出，
+        # 否则之后所有设置改动都会被静默地不写盘。
+        self._结束预览()
         self.close()
         self.deleteLater()
