@@ -56,7 +56,8 @@ print("== 二、不留临时文件 ==")
 检("目录里没有 .tmp 残留", not 残留, repr(残留))
 
 print("== 三、覆盖写不会写坏原文件 ==")
-原内容 = json.loads(open(路径, encoding="utf-8").read())
+with open(路径, encoding="utf-8") as f:
+    原内容 = json.loads(f.read())
 配置.存配置({"主题": "浅色"})
 检("覆盖后内容正确", 配置.读配置() == {"主题": "浅色"})
 检("覆盖前的内容仍可解析", isinstance(原内容, dict))
@@ -143,6 +144,45 @@ with open(路径, "w", encoding="utf-8") as f:
     json.dump({"最近": ["a.xht", 5, None, "b.xht"]}, f)
 读回 = 配置.读配置()
 检("最近里的非字符串项被摘掉", 读回.get("最近") == ["a.xht", "b.xht"], repr(读回.get("最近")))
+
+print("== 首次运行：没有配置文件不算坏 ==")
+# 回归：FileNotFoundError 以前和坏 JSON 走同一条 except，
+# 于是全新安装第一次打开就提示「有设置被重置成默认」，纯属误报。
+os.remove(路径)
+读回 = 配置.读配置()
+检(读回 == {}, "没有配置文件时返回空配置")
+检(not 配置.上次问题, "首次运行不留「坏配置」痕迹（实际 %r）" % (配置.上次问题,))
+
+print("== Tk 旧版与 Qt 版共用同一份配置规则 ==")
+# 回归：Tk 版以前自带一套「json.load 成功就原样返回」的读法，
+# 同一个 工坊配置.json，Qt 认为该丢掉的坏字段，Tk 直接 int() 炸在启动里。
+# 实测四种形状都能让 Tk 主窗口.__init__ 抛异常。
+import 核工坊 as Tk版  # noqa: E402
+
+检(Tk版.配置路径() == 配置.配置路径(), "两版指向同一个配置文件")
+for 名, 内容 in (
+    ("字号是字符串", {"字号": "abc"}),
+    ("字号是 null", {"字号": None}),
+    ("顶层是列表", [1, 2, 3]),
+    ("窗口尺寸是数字", {"窗口尺寸": 123}),
+    ("项目目录是数字", {"项目目录": 123}),
+    ("最近是字符串", {"最近": "a.xht"}),
+):
+    with open(路径, "w", encoding="utf-8") as f:
+        json.dump(内容, f)
+    读 = Tk版.读配置()
+    try:
+        # 复刻 Tk 主窗口.__init__ 里那几行取值
+        int(读.get("字号", 12))
+        读.get("项目目录") or "默认"
+        尺寸 = 读.get("窗口尺寸", "1380x860")
+        if "x" not in 尺寸:
+            raise TypeError("窗口尺寸不是 WxH")
+        for p in 读.get("最近", []):
+            os.path.isfile(p)
+        检(True, "Tk 读「%s」不炸" % 名)
+    except Exception as e:  # noqa: BLE001
+        检(False, "Tk 读「%s」会炸：%s: %s" % (名, type(e).__name__, e))
 
 print()
 print("=" * 62)

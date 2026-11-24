@@ -111,7 +111,8 @@ print("== 三、正常路径不受影响 ==")
 
 print("== 四、核 工坊 指向 Qt 版 ==")
 # 不能真的打开界面（测试环境没有显示器），只查入口分支指向哪个模块。
-源码 = open(内核脚本, encoding="utf-8").read()
+with open(内核脚本, encoding="utf-8") as f:
+    源码 = f.read()
 检("工坊 分支 import 核工坊Qt", "import 核工坊Qt" in 源码)
 检("保留了 tkinter 旧版后门 工坊旧", "工坊旧" in 源码)
 # import 核工坊Qt 失败时要退到旧版并说清楚原因
@@ -120,6 +121,41 @@ print("== 四、核 工坊 指向 Qt 版 ==")
 码, 出, 错 = 跑("帮助")
 检("帮助里写的是 Qt 版工坊", "核 工坊" in 出 and "Qt 版" in 出, "出=%r" % 出[:200])
 检("帮助里列出了工坊旧", "工坊旧" in 出)
+
+print()
+print("== 交互模式 ==")
+# 回归：编译用的是 "exec"，敲表达式没有任何回显 ——
+# `1 + 1`、`甲`、`核长度("abc")` 全都不打印，看着像解释器卡死。
+# 改成 "single"（Python 自带 REPL 那条路）后按值回显。
+def 交互(脚本, 目录):
+    结果 = subprocess.run(
+        [sys.executable, 内核脚本],
+        input=脚本.encode("utf-8"),
+        capture_output=True,
+        cwd=目录,
+        env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"),
+        timeout=60,
+    )
+    return (
+        结果.returncode,
+        (结果.stdout or b"").decode("utf-8", "replace").replace("\r\n", "\n"),
+        (结果.stderr or b"").decode("utf-8", "replace"),
+    )
+
+
+_目录 = tempfile.mkdtemp(prefix="核交互回归_")
+码, 出, 错 = 交互('1 + 1\n甲 = 5\n甲\n核长度("abc")\n核退出\n', _目录)
+检("表达式按值回显",
+   码 == 0 and "核> 2" in 出 and "核> 5" in 出 and "核> 3" in 出,
+   "出=%r" % 出[:200])
+检("赋值不回显", 出.count("5") == 1, "出=%r" % 出[:200])
+码, 出, 错 = 交互("核定义 f():\n    核返回 7\n\n核说(f())\n核退出\n", _目录)
+检("空行结束复合语句，随后能调用", 码 == 0 and "7" in 出, "出=%r" % 出[:200])
+码, 出, 错 = 交互('1/0\n核说("还活着")\n核退出\n', _目录)
+检("运行出错后会话继续", "还活着" in 出 and "除数不能为 0" in 错)
+检("完全正常的会话不留空清单",
+   not os.path.exists(os.path.join(_目录, "未定义.txt")),
+   "目录=%r" % os.listdir(_目录))
 
 print()
 print("=" * 62)

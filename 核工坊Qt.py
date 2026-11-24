@@ -10,6 +10,7 @@
 内核（转译/执行）全部复用 核.py，一行不改。
 """
 
+import codecs
 import os
 import queue
 import subprocess
@@ -239,7 +240,11 @@ class _控件样式(QProxyStyle):
         # 才能一眼看出「这里有个空框可以勾」。
         边框 = QColor(配色.get("次要文本", "#B2B6BE"))
         底 = QColor(配色.get("编辑器", "#1E1F22"))
-        字 = QColor(配色.get("文本", "#DFE1E5"))
+        # 勾线用白色，**不跟「文本」色走**：选中态的底是强调蓝(#3574F0)，
+        # 深色主题的文本色 #DFE1E5 在上面 3.27:1、浅色主题的 #1F2329 更是
+        # 只有 3.69:1 且是「深字压蓝底」，两套主题的勾看起来一深一浅。
+        # 白勾在两套主题下都是 4.28:1，观感也统一（禁用态另算）。
+        字 = QColor("#FFFFFF")
         if not 可用:
             强调 = 强调.darker(160)
             边框 = 边框.darker(130)
@@ -266,8 +271,6 @@ class _控件样式(QProxyStyle):
                 路径.moveTo(QPointF(区域.left() + 边 * 0.24, 区域.top() + 边 * 0.52))
                 路径.lineTo(QPointF(区域.left() + 边 * 0.42, 区域.top() + 边 * 0.70))
                 路径.lineTo(QPointF(区域.left() + 边 * 0.77, 区域.top() + 边 * 0.30))
-            if not 可用:
-                路径 = 路径  # 颜色已在上面的「字」里处理
             画笔.setPen(QPen(字, max(1.6, 边 * 0.14), _Qt.SolidLine, _Qt.RoundCap, _Qt.RoundJoin))
             画笔.setBrush(_Qt.NoBrush)
             画笔.drawPath(路径)
@@ -502,9 +505,9 @@ class 顶行(QWidget):
 
         self.搜索 = QLineEdit()
         self.搜索.setObjectName("searchBox")
-        self.搜索.setPlaceholderText("搜索")
+        self.搜索.setPlaceholderText("搜索（回车找下一处）")
         self.搜索.setFixedWidth(170)
-        self.搜索.returnPressed.connect(主窗.查找)
+        self.搜索.returnPressed.connect(主窗.搜索回车)
         布局.addWidget(self.搜索)
         布局.addSpacing(主题.间距_紧)
 
@@ -526,10 +529,22 @@ class 顶行(QWidget):
     def 切最大化(self):
         if self.主窗.isMaximized():
             self.主窗.showNormal()
-            self.最大化.setText("□")
         else:
             self.主窗.showMaximized()
-            self.最大化.setText("❐")
+        self.同步窗口钮()
+
+    def 同步窗口钮(self):
+        """按真实窗态回填「最大化 / 还原」那个字形。
+
+        以前只有点这个按钮（或双击顶栏）才会改字形：用户用 Win+↑、
+        拖到屏幕上沿贴边、或从任务栏还原时，窗口已经最大化了，
+        按钮却还画着 □ —— 顶栏状态和窗口状态对不上。
+        主窗.changeEvent 里也会调它，任何一条改窗态的路都能同步。
+        """
+        try:
+            self.最大化.setText("❐" if self.主窗.isMaximized() else "□")
+        except (AttributeError, RuntimeError):
+            pass
 
     def 设项目名(self, 文本):
         self.项目名.setText(文本)
@@ -696,7 +711,12 @@ class 左竖条(QWidget):
         self.setFixedWidth(44)
 
         布局 = QVBoxLayout(self)
-        布局.setContentsMargins(主题.内边距_竖, 主题.内边距, 主题.内边距_竖, 主题.内边距)
+        # 左右边距必须按「竖条宽 - 按钮宽」对半分：
+        # 以前用的是 主题.内边距(12)，而竖条固定 44、按钮固定 32 ——
+        # 12+32+12=56 > 44，布局挤不下就保住左边距、把右边距吃掉，
+        # 图标于是贴着竖条右边线、左侧空 12px，整列看着是歪的。
+        横边 = max(0, (44 - 32) // 2)
+        布局.setContentsMargins(横边, 主题.内边距, 横边, 主题.内边距)
         布局.setSpacing(主题.间距)
 
         # 每个按钮用不同「形状 + 颜色」，避免全是线条符号看不出区别。
@@ -1001,6 +1021,11 @@ class 主窗(QMainWindow):
         if 屏 is not None:
             宽 = max(min(宽, 屏.width() - 60), 900)
             高 = max(min(高, 屏.height() - 60), 620)
+            # 下限不能反过来把窗口撑得比屏幕还大：小屏（1024x600 上网本、
+            # 或缩放 150% 后的 1280x720）上 900/620 这两个下限会顶穿可用区，
+            # 窗口底边（状态栏、运行窗输入行）落到屏幕外，点都点不到。
+            宽 = min(宽, 屏.width())
+            高 = min(高, 屏.height())
         self.resize(宽, 高)
 
         位置 = self.配置.get("窗口位置", "")
@@ -1009,7 +1034,16 @@ class 主窗(QMainWindow):
         if "," in 位置:
             try:
                 x, y = (int(v) for v in 位置.split(","))
-                if 屏 is not None and 屏.contains(x + 50, y + 30):
+                # 要看**所有**显示器，不能只看主屏：副屏在主屏左边/上边时
+                # 坐标是负数，主屏 contains 必然为假 —— 用户上次把窗口
+                # 放在副屏，这次启动就被拽回主屏，位置记忆等于没有。
+                可见 = False
+                if 应用 is not None:
+                    for 屏 in 应用.screens():
+                        if 屏.availableGeometry().contains(x + 50, y + 30):
+                            可见 = True
+                            break
+                if 可见:
                     self.move(x, y)
             except (ValueError, IndexError):
                 pass
@@ -1143,11 +1177,17 @@ class 主窗(QMainWindow):
         欢迎.addStretch(1)
 
         图 = QLabel()
-        图标 = QPixmap(图标路径("核图标_128.png"))
-        if not 图标.isNull():
-            图.setPixmap(
-                图标.scaled(84, 84, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
+        # 和顶栏品牌标记同一条规矩：**从原图缩放**，不用预缩好的小图。
+        # 实测同样缩到 84px，核图标_128.png 只剩 19.8% 的不透明像素，
+        # 而从 核图标.png 原图缩是 23.2% —— 细轨道线在预缩那一步就被抹掉了，
+        # 欢迎页上的标志比顶栏那个淡一截。拿不到原图时才退回 128 版。
+        图标 = 缩放品牌图(84)
+        if 图标 is None:
+            图标 = QPixmap(图标路径("核图标_128.png"))
+            if not 图标.isNull():
+                图标 = 图标.scaled(84, 84, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if 图标 is not None and not 图标.isNull():
+            图.setPixmap(图标)
             图.setAlignment(Qt.AlignCenter)
             欢迎.addWidget(图)
 
@@ -1433,8 +1473,18 @@ class 主窗(QMainWindow):
         # Windows 非法字符
         if any(字 in 名 for 字 in '<>:"|?*'):
             return None, "文件名里不能出现 < > : \" | ? * 这些字符"
+        # 控制字符（换行、制表、NUL…）在 Windows 上一律非法。
+        # 粘贴文件名时很容易带进来，不拦的话 os.rename 报的是
+        # 「文件名、目录名或卷标语法不正确」，看不出到底哪儿错了。
+        if any(ord(字) < 32 for 字 in 名):
+            return None, "文件名里不能有换行、制表符这类控制字符"
         if not 名.lower().endswith(扩展名.lower()):
             名 += 扩展名
+        # 单个文件名上限 255 个字符（NTFS 组件长度）。超了同样是系统报错，
+        # 这里提前说清楚。要放在补后缀**之后**量，否则 255 个字的名字
+        # 补上 .xht 就超了。
+        if len(名) > 255:
+            return None, "文件名太长（连后缀最多 255 个字符）"
         return 名, None
 
     def 重命名当前(self):
@@ -1471,9 +1521,18 @@ class 主窗(QMainWindow):
             if 仅改大小写:
                 # 直接 rename 到同名不同大小写在 Windows 上是 no-op，
                 # 必须绕一圈：先改成一个临时名，再改成目标名。
+                # 第二步失败时必须改回去 —— 否则文件停在 `<旧名>.renaming`，
+                # 项目树里看不到它，用户会以为文件丢了。
                 临时 = 旧路径 + ".renaming"
                 os.rename(旧路径, 临时)
-                os.rename(临时, 新路径)
+                try:
+                    os.rename(临时, 新路径)
+                except OSError:
+                    try:
+                        os.rename(临时, 旧路径)
+                    except OSError:
+                        pass
+                    raise
             else:
                 os.rename(旧路径, 新路径)
         except OSError as e:
@@ -1505,6 +1564,14 @@ class 主窗(QMainWindow):
         跳过 = []
         self.清空控制台()
         self._写控制台("在项目中查找：%s\n" % 词)
+        if not os.path.isdir(self.项目目录 or ""):
+            self._写控制台("项目目录不存在：%s\n" % self.项目目录)
+            self.状态("项目目录不存在，先在左侧选一个项目")
+            return
+        # 命中上限：控制台本身只留 6000 行，命中几万处时逐条 insertPlainText
+        # 会把界面卡住好几十秒，而用户真正要看的是前几处。
+        上限 = 2000
+        截了 = False
         for 目录, 子目录, 文件 in os.walk(self.项目目录):
             子目录[:] = [
                 d for d in 子目录
@@ -1530,10 +1597,15 @@ class 主窗(QMainWindow):
                 for 号, 行 in enumerate(内容.splitlines(), 1):
                     if 词 in 行:
                         命中 += 1
-                        相对 = os.path.relpath(全, self.项目目录)
-                        self._写控制台(
-                            "%s:%d:  %s\n" % (相对, 号, 行.rstrip())
-                        )
+                        if 命中 <= 上限:
+                            相对 = os.path.relpath(全, self.项目目录)
+                            self._写控制台(
+                                "%s:%d:  %s\n" % (相对, 号, 行.rstrip())
+                            )
+                        else:
+                            截了 = True
+        if 截了:
+            self._写控制台("\n（命中太多，只列出前 %d 处）\n" % 上限)
         self._写控制台("\n共 %d 处\n" % 命中)
         if 跳过:
             self._写控制台("跳过 %d 个读不了的文件：%s\n"
@@ -1619,10 +1691,14 @@ class 主窗(QMainWindow):
             ("复制文件路径", lambda: self._复制路径(索引)),
             ("在文件管理器中显示", lambda: self._在管理器显示(索引)),
         ):
-            动作 = QAction(名, self)
+            # 动作挂在**菜单**上而不是主窗上：挂主窗的话菜单销毁了
+            # 动作还活着，每右键一次就永久多留 4 个 QAction。
+            动作 = QAction(名, 菜单)
             动作.triggered.connect(lambda _=False, c=命令: c())
             菜单.addAction(动作)
         菜单.exec(self.标签栏.mapToGlobal(位置))
+        # exec() 返回后菜单没用了，交给事件循环回收（同 弹出项目菜单）。
+        菜单.deleteLater()
 
     def _关闭其他标签(self, 保留):
         """关掉除「保留」以外的所有标签。
@@ -1888,6 +1964,19 @@ class 主窗(QMainWindow):
             return "keep"
         return "cancel"
 
+    @staticmethod
+    def _认行尾(内容):
+        """这份文件原本用的是 CRLF 还是 LF。
+
+        编辑器内部一律 LF（QPlainTextEdit 本来就只认 \\n），
+        但**保存时要按原样写回去**。以前固定 newline="\\n"：
+        在 Windows 上打开一个 CRLF 的 .xht，改一个字保存，
+        整个文件的行尾全被换成 LF —— git diff 显示「每一行都改了」，
+        而用户只动了一个字。本仓库的 .gitattributes 明确容忍 CRLF
+        （cr-at-eol），所以这种整文件改写是实打实的噪声。
+        """
+        return "\r\n" if "\r\n" in 内容 else "\n"
+
     def _重新加载(self, 编, 路径):
         """把磁盘上的内容重新读进编辑器，并刷新磁盘签名（P2-1）。"""
         try:
@@ -1896,6 +1985,7 @@ class 主窗(QMainWindow):
             self.状态("重新加载失败：%s" % e)
             return False
         编.编码 = 编码
+        编.行尾 = self._认行尾(内容)
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
         编.已改 = False
         try:
@@ -1946,6 +2036,7 @@ class 主窗(QMainWindow):
         编.文件路径 = os.path.abspath(路径)
         # 记住这个文件原本是什么编码，保存时按它写回（见 编辑器.编码）。
         编.编码 = 编码
+        编.行尾 = self._认行尾(内容)
         编.置文本(内容.replace("\r\n", "\n").replace("\r", "\n"))
         编._磁盘签名 = self._取磁盘签名(编.文件路径)
         编.hide()
@@ -2017,9 +2108,15 @@ class 主窗(QMainWindow):
             # 用别的老工具（或同项目里其它按 GBK 读的脚本）再打开就是乱码。
             # 用户看到的是「我只改了一个字，怎么全乱码了」。
             编码 = getattr(编, "编码", "utf-8") or "utf-8"
+            # 行尾同理：按文件**原本的行尾**写回（见 _认行尾）。
+            # newline="" 关掉 Python 的自动转换，由我们自己拼。
+            行尾 = getattr(编, "行尾", "\n") or "\n"
+            出文 = 文本.replace("\r\n", "\n").replace("\r", "\n")
+            if 行尾 != "\n":
+                出文 = 出文.replace("\n", 行尾)
             try:
-                with open(临时, "w", encoding=编码, newline="\n") as f:
-                    f.write(文本)
+                with open(临时, "w", encoding=编码, newline="") as f:
+                    f.write(出文)
                     f.flush()
                     os.fsync(f.fileno())
             except UnicodeEncodeError:
@@ -2027,8 +2124,8 @@ class 主窗(QMainWindow):
                 # 这时候**不能**默默换成 UTF-8 —— 用户会以为编码没变。
                 # 明确改成 UTF-8，同时把新编码记到编辑器上，
                 # 并在状态栏说明，让「编码变了」这件事是可见的。
-                with open(临时, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(文本)
+                with open(临时, "w", encoding="utf-8", newline="") as f:
+                    f.write(出文)
                     f.flush()
                     os.fsync(f.fileno())
                 编.编码 = "utf-8"
@@ -2130,6 +2227,14 @@ class 主窗(QMainWindow):
             )
             if 答 != QMessageBox.Yes:
                 return False
+        # 先把原来的归属记下来：**写失败要还原**。
+        # 以前是先改 文件路径 再写，写不进去（没权限、目标被占用、盘满）
+        # 时文档已经指向新路径了 —— 原文件还在磁盘上好好的，
+        # 可标签、下一次 Ctrl+S、「在文件管理器中显示」全指向那个
+        # 根本没写成功的新名字。一次失败的另存为不该改变文档的归属。
+        旧路径 = 编.文件路径
+        旧签名 = getattr(编, "_磁盘签名", None)
+        旧编码 = getattr(编, "编码", "utf-8")
         编.文件路径 = 路径
         # 换了目标路径，旧的磁盘签名不再对应任何文件；
         # 清掉它，免得下一次保存拿它去比新路径、误报「外部已修改」。
@@ -2138,6 +2243,12 @@ class 主窗(QMainWindow):
         if ok:
             self.刷新标签(编)
             self.加最近(路径)
+        else:
+            编.文件路径 = 旧路径
+            编._磁盘签名 = 旧签名
+            编.编码 = 旧编码
+            self.刷新标签(编)
+            self._刷新标题()
         return ok
 
     # ================= 项目树 =================
@@ -2174,7 +2285,12 @@ class 主窗(QMainWindow):
 
         提供 = QFileIconProvider()
         try:
-            项 = sorted(os.scandir(目录), key=lambda e: (not e.is_dir(), e.name.lower()))
+            # scandir 返回的是**要关闭的迭代器**：sorted(os.scandir(...))
+            # 用完不关，Windows 上会一直握着这个目录的句柄 ——
+            # 用户随后删/改名这个文件夹会报「正在被占用」，
+            # Python 也会在 GC 时抛 ResourceWarning。用 with 明确关掉。
+            with os.scandir(目录) as 迭代:
+                项 = sorted(迭代, key=lambda e: (not e.is_dir(), e.name.lower()))
         except OSError:
             return
         有内容 = False
@@ -2247,7 +2363,7 @@ class 主窗(QMainWindow):
                 ("设为项目文件夹", lambda: self.装载项目树(路径)),
                 ("在文件管理器中打开", lambda: self._在管理器显示路径(路径)),
             ):
-                动作 = QAction(名, self)
+                动作 = QAction(名, 菜单)
                 动作.triggered.connect(lambda _=False, c=命令: c())
                 菜单.addAction(动作)
         else:
@@ -2256,14 +2372,17 @@ class 主窗(QMainWindow):
                 ("复制路径", lambda: QApplication.instance().clipboard().setText(路径)),
                 ("在文件管理器中显示", lambda: self._在管理器显示路径(路径)),
             ):
-                动作 = QAction(名, self)
+                动作 = QAction(名, 菜单)
                 动作.triggered.connect(lambda _=False, c=命令: c())
                 菜单.addAction(动作)
         菜单.addSeparator()
-        刷新 = QAction("刷新项目树", self)
+        刷新 = QAction("刷新项目树", 菜单)
         刷新.triggered.connect(lambda: self.装载项目树(self.项目目录))
         菜单.addAction(刷新)
         菜单.exec(self.树.mapToGlobal(位置))
+        # 同 _标签右键：动作挂菜单、菜单用完即回收，否则每右键一次
+        # 就在主窗下永久留一个 QMenu + 若干 QAction。
+        菜单.deleteLater()
 
     def _在管理器显示路径(self, 路径):
         if not os.path.exists(路径):
@@ -2317,7 +2436,10 @@ class 主窗(QMainWindow):
         self.存配置()
 
     def 设制表宽(self, 宽):
-        self.制表宽 = max(1, int(宽))
+        # 走和读配置同一套夹取：1–16、坏值回退 4。
+        # 以前是 max(1, int(宽))：没有上限，配置文件/下拉框给个 200
+        # 就能把缩进推到屏幕外；int("四") 还会直接抛 ValueError。
+        self.制表宽 = self._安全制表宽(宽)
         for d in self.文档集:
             d.设制表宽(self.制表宽)
         self.更新状态栏()
@@ -2365,16 +2487,25 @@ class 主窗(QMainWindow):
             # 运行前必须把最新内容写盘，否则跑的是磁盘上的旧版本。
             # 这里不能静默失败：保存可能因为没有权限而失败，
             # 那样运行结果会莫名其妙地对不上编辑区。
-            if not self.保存(self.当前, 弹窗=False):
-                if not self.另存为(self.当前):
-                    self.状态("保存失败，已取消运行")
-                    return
+            #
+            # **必须 弹窗=True**：F5 是用户主动按的交互动作，不是关机收尾。
+            # 传 False 会跳过「磁盘被外部改过 / 文件已被删除」两道询问，
+            # 于是按一下 F5 就把别的程序刚写的内容悄悄盖掉、
+            # 或者把用户刚删掉的文件在原路径复活 —— 和 Ctrl+S 走同一条
+            # 保护路才说得通（保存() 的注释里也把 False 限定给
+            # 「关机保存、批量收尾」这类问不了用户的路）。
+            if not self.保存(self.当前, 弹窗=True):
+                self.状态("保存未完成，已取消运行")
+                return
         self.停止(静默=True)
         self.清空控制台()
         # 队列要在开新进程之前换一个新的：旧读线程可能已经在关流前读到了
         # 数据、只是还没被 _吸输出 取走，那些残留会打在新一轮运行的开头。
         换队列 = getattr(self, "_输出", None)
         self._输出 = queue.Queue()
+        # 解码器也要跟着这一轮走：_再捞管道 补捞尾巴时要用**同一个**，
+        # 否则读线程攥着的半个汉字和补捞到的后半个会各变成一个替换符。
+        self._输出解码 = codecs.getincrementaldecoder("utf-8")("replace")
         if 换队列 is not None:
             while True:
                 try:
@@ -2409,14 +2540,16 @@ class 主窗(QMainWindow):
         self._刷新运行状态样式("运行")
         self.竖条.设状态点("运行")
         self._读线程 = threading.Thread(
-            target=self._读输出, args=(self.进程, self._输出), daemon=True
+            target=self._读输出,
+            args=(self.进程, self._输出, self._输出解码),
+            daemon=True,
         )
         self._读线程.start()
         self._轮询 = QTimer(self)
         self._轮询.timeout.connect(self._检查进程)
         self._轮询.start(80)
 
-    def _读输出(self, 进程, 队列):
+    def _读输出(self, 进程, 队列, 解码=None):
         """把子进程的输出搬进 队列。
 
         队列**按参数传进来**，不是每次读 self._输出 —— 运行() 开新一轮时会
@@ -2428,6 +2561,11 @@ class 主窗(QMainWindow):
         except (AttributeError, OSError, ValueError):
             pass
         空读 = 0
+        # **增量解码**：read1 是按字节切的，一个汉字的 3 个字节很可能
+        # 正好被 65536 的边界劈开。每块各自 decode("utf-8","replace")
+        # 会把那半个字变成两个替换符 —— 输出超过 64KB 的中文程序，
+        # 控制台里就会零星冒出「」。增量解码器会把半截字节留到下一块。
+        解码 = 解码 if 解码 is not None else codecs.getincrementaldecoder("utf-8")("replace")
         try:
             while True:
                 try:
@@ -2437,7 +2575,7 @@ class 主窗(QMainWindow):
                 except (OSError, ValueError):
                     break
                 if 块:
-                    队列.put(块.decode("utf-8", "replace"))
+                    队列.put(解码.decode(块))
                     空读 = 0
                     continue
                 已结束 = 进程.poll() is not None
@@ -2460,7 +2598,11 @@ class 主窗(QMainWindow):
                     break
                 time.sleep(0.01)
         finally:
-            pass
+            # 收尾：把解码器里攒着的最后半截字节吐出来（正常 UTF-8 流里
+            # 没有残留；真有的话让它变成替换符，总比悄悄丢掉强）。
+            尾 = 解码.decode(b"", True)
+            if 尾:
+                队列.put(尾)
 
     def _检查进程(self):
         self._吸输出()
@@ -2502,7 +2644,14 @@ class 主窗(QMainWindow):
         except (OSError, ValueError):
             return
         if 剩余:
-            队列.put(剩余.decode("utf-8", "replace"))
+            读 = getattr(self, "_读线程", None)
+            共 = getattr(self, "_输出解码", None)
+            if 共 is not None and (读 is None or not 读.is_alive()):
+                # 读线程已经收工，可以安全接着用它的解码器：
+                # 半个汉字的字节还在里面，这样拼起来才是完整的字。
+                队列.put(共.decode(剩余, True))
+            else:
+                队列.put(剩余.decode("utf-8", "replace"))
 
     @staticmethod
     def _杀进程树(进程):
@@ -2579,6 +2728,21 @@ class 主窗(QMainWindow):
                     流.close()
                 except (OSError, ValueError):
                     pass
+        # 收尸：Popen 的 returncode 只有 poll()/wait() 才会填上。
+        # 以前杀完直接把引用置 None，对象被回收时 subprocess 会报
+        # 「subprocess NNNN is still running」的资源警告（实测跑一次
+        # 界面测试就冒一条），Windows 上那个进程句柄也一直挂着没释放。
+        # 走到这里的进程要么已经自然结束、要么刚被 _杀进程树 杀过，
+        # 正常都是立刻返回；给 0.5 秒兜底，等不到就 poll 一下不强等。
+        try:
+            进程.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                进程.poll()
+            except (OSError, ValueError):
+                pass
+        except (OSError, ValueError):
+            pass
         self.进程 = None
         # 流已经关了，读线程会很快从 read1 返回并退出；短暂 join 一下，
         # 拿不到也不强等（daemon 线程，不会拖住退出）。
@@ -2755,6 +2919,13 @@ class 主窗(QMainWindow):
         try:
             import 帮助窗口
 
+            旧 = getattr(self, "_版本历史", None)
+            if 旧 is not None and _还活着(旧) and 旧.isVisible():
+                # 已经开着就提到前面（同 查找 / 版本控制面板）：
+                # 每点一次都新建一个的话，屏幕上会叠出好几个同样的窗口。
+                旧.raise_()
+                旧.activateWindow()
+                return
             # 传项目目录：打包版的 版本/ 不在 exe 里，得去项目目录找
             self._版本历史 = 帮助窗口.版本历史对话框(
                 self, 核.版本, self.项目目录
@@ -2770,6 +2941,11 @@ class 主窗(QMainWindow):
         try:
             import 帮助窗口
 
+            旧 = getattr(self, "_关于", None)
+            if 旧 is not None and _还活着(旧) and 旧.isVisible():
+                旧.raise_()
+                旧.activateWindow()
+                return
             self._关于 = 帮助窗口.关于对话框(self, 核.版本)
             # 同上：非模态窗口必须自回收，否则「关于」每开一次漏一个。
             self._关于.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -2882,6 +3058,18 @@ class 主窗(QMainWindow):
         try:
             import 版本控制窗口
 
+            旧 = getattr(self, "_版本窗", None)
+            if 旧 is not None and _还活着(旧) and 旧.isVisible():
+                # 已经开着一个就把它提到前面，别再叠一个新的（P2-2）。
+                # 以前每点一次「版本控制」都 new 一个窗口，旧的还开着，
+                # 屏幕上堆出好几个一模一样的面板，_版本窗 只记得最后一个，
+                # 换主题/刷新也只作用于最后那个。
+                if getattr(旧, "目录", None) == self.项目目录:
+                    旧.刷新()
+                    旧.raise_()
+                    旧.activateWindow()
+                    return
+                旧.close()
             self._版本窗 = 版本控制窗口.版本控制窗口(self, self.项目目录)
             # 同上：版本控制面板每开一次也漏一个隐藏 QDialog。
             self._版本窗.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -2902,6 +3090,29 @@ class 主窗(QMainWindow):
         except Exception as e:  # noqa: BLE001
             self.状态("快速打开失败：%s" % e)
 
+    def 搜索回车(self):
+        """顶行搜索框回车：在**当前文档**里找下一处。
+
+        以前这个信号直接连的是 查找()（开面板），而 查找() 的注释却写着
+        「想快速定位下一处，继续用搜索框回车（它自己连的是 查找下一个）」——
+        说的和做的不是一回事：在搜索框里敲个词按回车，弹出来的是替换面板，
+        想连着按回车跳下一处根本做不到。
+        现在按注释里说的做：有词有文档就跳下一处，找不到给一句状态；
+        词是空的（或没有打开的文档）才开面板，让用户有个输入的地方。
+        """
+        词 = ""
+        try:
+            词 = self.顶行.搜索.text().strip()
+        except (AttributeError, RuntimeError):
+            词 = ""
+        if not 词 or self.当前 is None:
+            self.查找()
+            return
+        if self.当前.查找下一个(词):
+            self.状态("找到：%s" % 词)
+        else:
+            self.状态("找不到「%s」" % 词)
+
     def 查找(self):
         """Ctrl+F：打开查找/替换框；顶行搜索框有内容时直接沿用那个词。
 
@@ -2919,6 +3130,19 @@ class 主窗(QMainWindow):
         try:
             import 查找对话框
 
+            旧 = getattr(self, "_查找窗", None)
+            if 旧 is not None and _还活着(旧) and 旧.isVisible():
+                # 复用已经开着的查找框（P2-2）：Ctrl+F 连按三次以前会
+                # 叠出三个查找框，每个都盯着同一个编辑器，用户不知道该用哪个。
+                # 它内部本来就按 主窗.当前 取编辑器，切标签后照样正确。
+                if 词 and hasattr(旧, "查找框"):
+                    旧.查找框.setText(词)
+                    旧.查找框.selectAll()
+                旧.raise_()
+                旧.activateWindow()
+                if hasattr(旧, "查找框"):
+                    旧.查找框.setFocus()
+                return
             窗 = 查找对话框.查找对话框(self, self.当前)
             # 非模态窗口：关掉要能自己回收，否则每按一次 Ctrl+F
             # 就常驻一个隐藏 QDialog（实测 5 开 5 残留）。
@@ -2941,7 +3165,13 @@ class 主窗(QMainWindow):
             # 这个 QDialog 只是隐藏并留在主窗的 children 里 ——
             # 每按一次 Ctrl+G 漏一个，长会话里越积越多。
             框 = 查找对话框.跳转对话框(self, self.当前)
-            框.setAttribute(Qt.WA_DeleteOnClose, True)
+            # **不要**再设 WA_DeleteOnClose：它和下面这句 deleteLater 是
+            # 两套回收，撞在一起会二次删除。实测按 Esc 或点窗口右上角 ×
+            # 关掉之后，C++ 对象已经被 WA_DeleteOnClose 删了，
+            # 再 deleteLater 抛 RuntimeError，被外层 except 抓住，
+            # 状态栏就冒出一句英文「打不开跳转框：Internal C++ object
+            # (跳转对话框) already deleted」—— 明明关得好好的。
+            # 模态框只需要 exec 之后这一句 deleteLater。
             框.exec()
             框.deleteLater()
         except Exception as e:  # noqa: BLE001
@@ -3052,7 +3282,8 @@ class 主窗(QMainWindow):
             # 设置对话框尤其要收 —— 它带着预览状态（_设置预览中），
             # 残留对象越多，越容易在退出时互相干扰。
             框 = 设置窗口Qt.设置对话框(self)
-            框.setAttribute(Qt.WA_DeleteOnClose, True)
+            # 同 跳到行：只留 exec 之后这一句回收，别再叠 WA_DeleteOnClose，
+            # 否则关掉设置框时状态栏会冒一句英文的「already deleted」。
             框.exec()
             框.deleteLater()
         except Exception as e:  # noqa: BLE001
@@ -3083,10 +3314,21 @@ class 主窗(QMainWindow):
             尾 = "   （已选 %d 字符）" % (游.selectionEnd() - 游.selectionStart())
         # 编码显示真实值：以前固定写 "UTF-8"，打开一个 GBK 文件时
         # 状态栏在说谎。现在取编辑器记下的原编码。
-        编码 = (getattr(编, "编码", "utf-8") or "utf-8").replace("utf-8-sig", "UTF-8 BOM").replace("utf-8", "UTF-8").replace("gbk", "GBK")
+        编码 = (
+            (getattr(编, "编码", "utf-8") or "utf-8")
+            .replace("utf-8-sig", "UTF-8 BOM")
+            .replace("utf-8", "UTF-8")
+            .replace("gbk", "GBK")
+            # 记事本存成「Unicode」的文件现在能正常读了（见 核.读源码），
+            # 状态栏也要把它的真实编码显示出来，别一律写 UTF-8。
+            .replace("utf-16", "UTF-16")
+            .replace("utf-32", "UTF-32")
+        )
         self.状态右.setText(
-            "核语言   空格 %d   %s   行 %d, 列 %d%s"
-            % (self.制表宽, 编码, 行, 列, 尾)
+            "核语言   空格 %d   %s   %s   行 %d, 列 %d%s"
+            % (self.制表宽, 编码,
+               "CRLF" if getattr(编, "行尾", "\n") == "\r\n" else "LF",
+               行, 列, 尾)
         )
 
     # ================= 菜单 =================
@@ -3143,6 +3385,8 @@ class 主窗(QMainWindow):
             ("打开文件夹…", self.选择项目目录, None),
             ("保存", self.保存当前, "Ctrl+S"),
             ("另存为…", self.另存为, "Ctrl+Shift+S"),
+            # F2 早就绑好了，菜单里却一直找不到 —— 快捷键只有会背的人用得上。
+            ("重命名…", self.重命名当前, "F2"),
             ("关闭标签", self.关闭当前, "Ctrl+W"),
             ("退出", self.退出, None),
         ):
@@ -3175,23 +3419,32 @@ class 主窗(QMainWindow):
         菜单.addSeparator()
 
         编 = 菜单.addMenu("编辑")
-        for 名, 命令 in (
-            ("撤销", lambda: self.当前 and self.当前.undo()),
-            ("重做", lambda: self.当前 and self.当前.redo()),
+        # 快捷键提示用 QKeySequence 的标准键取，不手写字符串：
+        # 「重做」在 Windows 上是 Ctrl+Y、别的平台上是 Ctrl+Shift+Z，
+        # 写死哪一个都会在另一半平台上骗人。这几项本身走的是
+        # QPlainTextEdit 自带的标准键，这里只负责把键面画出来。
+        for 名, 命令, 标准键 in (
+            ("撤销", lambda: self.当前 and self.当前.undo(), QKeySequence.Undo),
+            ("重做", lambda: self.当前 and self.当前.redo(), QKeySequence.Redo),
         ):
-            编.addAction(self._加动作(编, 名, 命令))
+            编.addAction(
+                self._加动作(编, 名, 命令, 键=QKeySequence(标准键).toString())
+            )
         编.addSeparator()
-        for 名, 命令 in (
-            ("剪切", lambda: self.当前 and self.当前.cut()),
-            ("复制", lambda: self.当前 and self.当前.copy()),
-            ("粘贴", lambda: self.当前 and self.当前.paste()),
-            ("全选", lambda: self.当前 and self.当前.selectAll()),
+        for 名, 命令, 标准键 in (
+            ("剪切", lambda: self.当前 and self.当前.cut(), QKeySequence.Cut),
+            ("复制", lambda: self.当前 and self.当前.copy(), QKeySequence.Copy),
+            ("粘贴", lambda: self.当前 and self.当前.paste(), QKeySequence.Paste),
+            ("全选", lambda: self.当前 and self.当前.selectAll(), QKeySequence.SelectAll),
         ):
-            编.addAction(self._加动作(编, 名, 命令))
+            编.addAction(
+                self._加动作(编, 名, 命令, 键=QKeySequence(标准键).toString())
+            )
         编.addSeparator()
         for 名, 命令, 键 in (
             ("注释 / 取消注释", self.切换注释, "Ctrl+/"),
             ("查找 / 替换…", self.查找, "Ctrl+F"),
+            ("在项目中查找…", self.在项目中查找, "Ctrl+Shift+F"),
             ("转到行…", self.跳到行, "Ctrl+G"),
         ):
             编.addAction(self._加动作(编, 名, 命令, 键=键))
@@ -3218,11 +3471,13 @@ class 主窗(QMainWindow):
         菜单.addSeparator()
 
         视 = 菜单.addMenu("视图")
-        for 名, 命令 in (
-            ("深色主题", lambda: self.换主题("深色")),
-            ("浅色主题", lambda: self.换主题("浅色")),
-        ):
-            视.addAction(self._加动作(视, 名, 命令))
+        # 主题两项也画成勾选态：和下面几个开关同一套观感，
+        # 点开菜单一眼看得出「现在是深色还是浅色」，不用先点一下再看界面。
+        for 名 in ("深色", "浅色"):
+            动作 = self._加动作(视, 名 + "主题", lambda n=名: self.换主题(n))
+            动作.setCheckable(True)
+            动作.setChecked(self.主题名 == 名)
+            视.addAction(动作)
         视.addSeparator()
         # 这几项是**开关**，用可勾选动作，并在打开菜单时按真实状态回填。
         # 以前它们全是普通动作：点开菜单看不出「项目栏现在到底开没开」，
@@ -3369,6 +3624,13 @@ class 主窗(QMainWindow):
         if 事件.type() == QEvent.WindowStateChange:
             self._应用窗口外观()
             QTimer.singleShot(0, self._应用窗口外观)
+            # 顶栏「最大化/还原」字形跟着真实窗态走：Win+↑、贴边吸附、
+            # 任务栏还原这些路径不经过 顶行.切最大化，不回填就会一直画着 □。
+            try:
+                self.顶行.同步窗口钮()
+                QTimer.singleShot(0, self.顶行.同步窗口钮)
+            except (AttributeError, RuntimeError):
+                pass
 
     # —— 无边框窗口的边缘缩放 ——
 
@@ -3704,6 +3966,12 @@ class 主窗(QMainWindow):
 
     def dragEnterEvent(self, 事件):
         if 事件.mimeData().hasUrls():
+            # 记下当前窗态：万一拖放过程中窗口被最小化，落下时要按原样恢复
+            self._拖放前窗态 = (
+                "fullscreen" if self.isFullScreen()
+                else "maximized" if self.isMaximized()
+                else "normal"
+            )
             事件.acceptProposedAction()
 
     def dropEvent(self, 事件):
@@ -3726,7 +3994,18 @@ class 主窗(QMainWindow):
         事件.acceptProposedAction()
         if 切了项目:
             self.状态("已临时切换项目到 %s（重启后恢复原项目）" % os.path.basename(self.项目目录))
-        self.showNormal()
+        # **只有最小化/隐藏时才 showNormal()**。
+        # 以前无条件调用：窗口本来最大化（或全屏），拖一个文件进来
+        # 就被还原成普通大小，面板宽度、滚动位置全变 ——
+        # 用户只是拖了个文件，不是想把窗口缩小（同 closeEvent 的 P3-3）。
+        if self.isMinimized() or not self.isVisible():
+            状态 = getattr(self, "_拖放前窗态", None)
+            if 状态 == "fullscreen":
+                self.showFullScreen()
+            elif 状态 == "maximized":
+                self.showMaximized()
+            else:
+                self.showNormal()
         self.raise_()
         self.activateWindow()
 
@@ -3747,12 +4026,23 @@ def 启动(参数=None):
     应用 = QApplication.instance() or QApplication(sys.argv)
     应用.setApplicationName("核工坊")
     窗 = 主窗()
-    # 双击 .xht 文件时，系统会把路径作为参数传进来，直接打开它
+    # 双击 .xht 文件时，系统会把路径作为参数传进来，直接打开它。
+    # **所有**文件参数都要开：以前开完第一个就 break，
+    # 选中三个文件「打开方式 → 核工坊」只出来一个，另两个悄悄没了。
+    # 目录参数当作项目目录（和拖放同一个口径）。
     参数 = 参数 if 参数 is not None else sys.argv[1:]
+    开过 = False
     for 项 in 参数:
-        if os.path.isfile(项):
-            窗.打开(项)
-            break
+        try:
+            if os.path.isdir(项):
+                窗.装载项目树(os.path.abspath(项))
+            elif os.path.isfile(项):
+                窗.打开(项)
+                开过 = True
+        except OSError:
+            continue
+    if 开过:
+        窗.刷新标签()
     窗.show()
     return 应用.exec()
 

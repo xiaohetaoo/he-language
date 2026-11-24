@@ -25,19 +25,30 @@ import sys
 
 
 def 找git():
-    """找到可用的 git 可执行文件，找不到返回 None。"""
+    """找到可用的 git 可执行文件，找不到返回 None。
+
+    找到之后记一笔：一次 状态() 要跑 4~5 条 git 命令，每条都重新
+    shutil.which 扫一遍 PATH（几十个目录、每个都要 stat），
+    在杀毒软件盯着的机器上这一下就是几百毫秒，而结果整个进程都不会变。
+    只缓存**找到**的结果 —— 没找到时下次仍然重找，用户中途装了 git 也能认。
+    """
+    缓 = globals().get("_git路径")
+    if 缓 and os.path.isfile(缓):
+        return 缓
     路径 = shutil.which("git")
+    if not 路径:
+        # 打包成 exe 后 PATH 可能不含 Git；再试几个常见安装位置
+        for 候选 in (
+            r"C:\Program Files\Git\cmd\git.exe",
+            r"C:\Program Files (x86)\Git\cmd\git.exe",
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "cmd", "git.exe"),
+        ):
+            if 候选 and os.path.isfile(候选):
+                路径 = 候选
+                break
     if 路径:
-        return 路径
-    # 打包成 exe 后 PATH 可能不含 Git；再试几个常见安装位置
-    for 候选 in (
-        r"C:\Program Files\Git\cmd\git.exe",
-        r"C:\Program Files (x86)\Git\cmd\git.exe",
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "cmd", "git.exe"),
-    ):
-        if 候选 and os.path.isfile(候选):
-            return 候选
-    return None
+        globals()["_git路径"] = 路径
+    return 路径
 
 
 def 无窗口标志():
@@ -238,6 +249,10 @@ def 摘要(状态字典):
 #: 全塞进 QPlainTextEdit 会让界面卡住。看全量还是去 git 客户端。
 diff行数上限 = 4000
 
+#: 未跟踪文件最多读这么多字节（2 MB）。只读前面一段就够面板显示了，
+#: 见 _未跟踪内容 里的说明。
+_未跟踪读取上限 = 2 * 1024 * 1024
+
 
 def 取差异(目录, 相对路径):
     """取单个文件相对 HEAD 的 diff（只读），返回 (文本, 说明)。
@@ -309,7 +324,11 @@ def _未跟踪内容(目录, 相对路径, 上限=None):
         return None  # 已被 git 跟踪，不是未跟踪文件
     try:
         with open(全, "rb") as f:
-            原 = f.read()
+            # **不能整份 read()**：未跟踪文件里躺着几百 MB 的日志/数据文件
+            # 是很常见的（.gitignore 还没写），全读进内存再 splitlines，
+            # 界面会直接卡死甚至 MemoryError。面板本来只显示前几千行，
+            # 读够这些就行。
+            原 = f.read(_未跟踪读取上限 + 1)
     except OSError:
         return None
     # 二进制文件不往文本框里塞
@@ -319,19 +338,34 @@ def _未跟踪内容(目录, 相对路径, 上限=None):
     # 以前只认 UTF-8，GBK 编码的文件直接判「读不到」→ 面板显示
     # 「没有可显示的差异」，用户以为文件真的没改动（实测）。
     # GB18030 是超集，能覆盖绝大多数中文 Windows 下保存的文本。
+    #
+    # 用**增量解码器**：只读了前 2MB 时，末尾很可能切在半个汉字上，
+    # 直接 decode() 会抛 UnicodeDecodeError，两种编码都失败 →
+    # 大文件反而显示「没有差异」。增量解码在 final=False 时把不完整的
+    # 尾字节留在缓冲里，不报错，也不影响前面已经解出来的内容。
+    import codecs
+
+    截了字节 = len(原) > _未跟踪读取上限
+    喂 = 原[:_未跟踪读取上限] if 截了字节 else 原
     文本 = None
     for 编码 in ("utf-8", "gb18030"):
         try:
-            文本 = 原.decode(编码)
+            解 = codecs.getincrementaldecoder(编码)()
+            文本 = 解.decode(喂, final=not 截了字节)
             break
         except UnicodeDecodeError:
             continue
     if 文本 is None:
         return None
+    if 截了字节 and "\n" in 文本:
+        # 丢掉最后那半行，别把截断处显示成一句完整的话
+        文本 = 文本[:文本.rfind("\n") + 1]
     行集 = 文本.splitlines()
     头 = ["--- /dev/null", "+++ b/%s" % 相对路径, "@@ 新文件 @@"]
     体 = ["+%s" % 行 for 行 in 行集]
     if len(行集) > 上限:
         体 = 体[:上限]
         体.append("… 已截断（共 %d 行，只显示前 %d 行）" % (len(行集), 上限))
+    elif 截了字节:
+        体.append("… 文件太大，只读了前 %d MB" % (_未跟踪读取上限 // 1024 // 1024))
     return "\n".join(头 + 体)

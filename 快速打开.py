@@ -73,6 +73,10 @@ class 快速打开(QDialog):
         self.输入框.setPlaceholderText("输入文件名过滤，回车打开，Esc 关闭")
         self.输入框.textChanged.connect(self._过滤)
         self.输入框.returnPressed.connect(self._打开选中)
+        # 上下键要能直接在输入框里选列表项（PyCharm 的 Search Everywhere
+        # 就是这样）。QLineEdit 默认把 ↑↓ 吃掉，用户打完字必须松开键盘
+        # 去点列表，或者按 Tab 把焦点挪过去 —— 快速打开就不快了。
+        self.输入框.installEventFilter(self)
         布局.addWidget(self.输入框)
 
         self.列表 = QListWidget()
@@ -92,6 +96,20 @@ class 快速打开(QDialog):
 
         self._过滤("")
         self.输入框.setFocus()
+
+    def eventFilter(self, 对象, 事件):
+        from PySide6.QtCore import QEvent, Qt
+
+        if 对象 is self.输入框 and 事件.type() == QEvent.KeyPress:
+            键 = 事件.key()
+            步 = {Qt.Key_Down: 1, Qt.Key_Up: -1,
+                  Qt.Key_PageDown: 8, Qt.Key_PageUp: -8}.get(键)
+            if 步 is not None and self.列表.count():
+                行 = self.列表.currentRow()
+                新 = max(0, min(self.列表.count() - 1, (行 if 行 >= 0 else 0) + 步))
+                self.列表.setCurrentRow(新)
+                return True
+        return super().eventFilter(对象, 事件)
 
     def _收集(self, 根):
         结果 = []
@@ -113,8 +131,10 @@ class 快速打开(QDialog):
     def _过滤(self, 词):
         词 = 词.strip().lower()
         self.列表.clear()
+        上限 = 200
+        总命中 = len(self.全部文件)
         if not 词:
-            self.候选 = self.全部文件[:200]
+            self.候选 = self.全部文件[:上限]
         else:
             # 真·子序列模糊匹配：文件名里命中排前面，路径里命中排后面。
             命中 = []
@@ -128,13 +148,26 @@ class 快速打开(QDialog):
                 if 分 is not None:
                     命中.append((-分, 1, 相对, 全))
             命中.sort()
-            self.候选 = [(r, p) for _, _, r, p in 命中[:200]]
+            总命中 = len(命中)
+            self.候选 = [(r, p) for _, _, r, p in 命中[:上限]]
         for 相对, _全 in self.候选:
             QListWidgetItem(相对, self.列表)
         if self.列表.count():
             self.列表.setCurrentRow(0)
+        # 「匹配 N 个」要说**真实命中数**。以前直接用 len(候选)，
+        # 而候选被截到 200 —— 500 个命中也显示「匹配 200 个」，
+        # 用户以为剩下的文件不存在，不会再往下缩关键词。
+        截 = 总命中 > len(self.候选)
+        根 = getattr(self.主窗, "项目目录", "")
+        if not 根 or not os.path.isdir(根):
+            # 项目目录被删掉 / U 盘拔了 / 配置里指了个不存在的路径时，
+            # 以前只显示「共 0 个文件，匹配 0 个」，用户以为是搜索坏了。
+            self.提示.setText("项目目录不存在：%s" % (根 or "（未设置）"))
+            return
         self.提示.setText(
-            "共 %d 个文件，匹配 %d 个" % (len(self.全部文件), len(self.候选))
+            "共 %d 个文件，匹配 %d 个%s"
+            % (len(self.全部文件), 总命中,
+               ("（只列前 %d 个，继续输入可缩小范围）" % len(self.候选)) if 截 else "")
         )
 
     def _打开选中(self):

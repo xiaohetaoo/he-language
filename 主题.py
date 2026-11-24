@@ -71,6 +71,10 @@
     "警告": "#D5B778",
     "成功": "#6AAB73",
     "关闭红": "#C42B1C",
+    # 标签关闭 ✕ 悬停时的线条色。不能直接用上面那颗填充红：
+    # #C42B1C 在面板底上只有 2.44:1、悬停底上 1.98:1（非文本要 ≥ 3.0）。
+    # 这颗在 面板/编辑器/悬停/按下 四种底上分别是 4.78 / 5.71 / 3.88 / 3.32。
+    "关闭图标红": "#F0716A",
     # 图标：每个功能一个颜色。这里的取值都验算过，
     # 保证在各自的底色（窗口/悬停）上对比度 ≥ 3.0（WCAG 非文本对比）。
     "图标项目": "#6C9EF8",
@@ -137,6 +141,8 @@
     "警告": "#8A6D00",
     "成功": "#067D17",
     "关闭红": "#C42B1C",
+    # 浅色底上这颗深红本身就够（面板 5.33:1），与填充红同值即可。
+    "关闭图标红": "#C42B1C",
     # 图标：浅色底上必须用更深的同色系，否则亮蓝亮绿会糊在白底上
     "图标项目": "#2F6FD0",
     "图标结构": "#7B4FD0",
@@ -430,15 +436,22 @@ QTabBar::close-button {
        用文字/边框拼出来的「×」。所以这里给一张内嵌的 SVG：
        用 data: URI 写进去，单文件打包后不会因为相对路径失效
        （这正是当初改成 image:none 的原因，换个手段解决即可）。
-       颜色用浅灰（#9AA0AB），深浅两套主题下都能看清。 */
-    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%239AA0AB' stroke-width='1.4' stroke-linecap='round'/></svg>");
+
+       **颜色跟主题走**：以前写死 %239AA0AB（浅灰），深色底上 5.25:1 没问题，
+       浅色标签底(#F7F8FA)上只有 2.47:1 —— 低于 WCAG 非文本 3.0 的线，
+       浅色主题下那个 ✕ 淡得几乎看不见。改用「次要文本」色（浅色 5.44:1）。 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='__次要文本URL__' stroke-width='1.4' stroke-linecap='round'/></svg>");
     subcontrol-position: right;
     width: 10px; height: 10px;
     margin-right: 6px;
 }
 QTabBar::close-button:hover {
-    /* 悬停时换成偏红的深色，提示「点这里会关掉」 */
-    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='%23C75450' stroke-width='1.6' stroke-linecap='round'/></svg>");
+    /* 悬停时换成红色，提示「点这里会关掉」。
+       用的是**图标专用的红**，不是窗口关闭钮那颗 #C42B1C：
+       那颗是 Windows 标题栏的填充色，配白 ✕ 才够亮；直接拿它当
+       深色底上的线条色只有 2.44:1（悬停底 #393B40 上更低到 1.98），
+       鼠标移上去反而看不清。图标红在四种深色底上都 ≥ 3.3:1。 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 2 L8 8 M8 2 L2 8' stroke='__关闭图标红URL__' stroke-width='1.6' stroke-linecap='round'/></svg>");
 }
 
 /* 编辑器 */
@@ -496,6 +509,17 @@ QScrollBar::handle:horizontal {
 QScrollBar::handle:horizontal:hover { background: __按下__; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+
+/* 面板类控件的滚动条槽要用**面板底**，不能跟编辑器底。
+   上面那条通用规则把槽色钉成 __编辑器__，而项目树(QTreeWidget)、
+   设置左栏(QListWidget)、语法对照表(#refTable) 的底色是 __面板__ ——
+   深色下 #1E1F22 压在 #2B2D30 上差 1.19:1、浅色下 #FFFFFF 压在 #F7F8FA 上
+   差 1.06:1，右缘就多出一条颜色不同的竖带，看着像面板没铺满。
+   编辑器自己仍然用上面那条（它的底就是 __编辑器__）。 */
+QTreeWidget QScrollBar:vertical, QListWidget QScrollBar:vertical,
+QPlainTextEdit#refTable QScrollBar:vertical { background: __面板__; }
+QTreeWidget QScrollBar:horizontal, QListWidget QScrollBar:horizontal,
+QPlainTextEdit#refTable QScrollBar:horizontal { background: __面板__; }
 
 /* 运行窗口 */
 #runHeader { background: __面板__; border-top: 1px solid __边框__; }
@@ -697,6 +721,11 @@ def 生成样式(主题=None, 字号=12, 等宽=None):
     数据["界面字体"] = 界面字体
     数据["字号"] = str(int(字号))
     数据["等宽字体"] = 等宽 or 等宽候选[0]
+    # 内嵌 SVG 里的颜色要写成 URL 转义（# → %23），否则 data: URI 里的
+    # `#` 会被当成片段分隔符，整张图解析失败、图标消失。
+    # 这两条给标签栏关闭按钮用，颜色跟主题走（见 QSS 里的说明）。
+    for 键 in ("次要文本", "关闭红", "关闭图标红"):
+        数据[键 + "URL"] = "%23" + str(数据[键]).lstrip("#")
     文本 = _QSS
     # 保险：模板里若混进了 `{中文名}` 这种单花括号写法（CSS 的块花括号
     # 里永远是选择器和声明，绝不会只有纯中文），先统一成 `__中文名__`。

@@ -171,7 +171,8 @@ except Exception as e:  # noqa: BLE001
     检("非仓库面板能构造", False, repr(e))
 
 print("== 八、绝不能有写操作（只读保证）==")
-源码 = open(os.path.join(根, "版本控制.py"), encoding="utf-8").read()
+with open(os.path.join(根, "版本控制.py"), encoding="utf-8") as f:
+    源码 = f.read()
 危险 = ["commit", "push", "add", "checkout", "reset", "clean", "stash", "merge",
         "rebase", "rm ", "fetch", "pull", "tag"]
 命中 = []

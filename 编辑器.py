@@ -8,6 +8,7 @@
 """
 
 import re
+import unicodedata
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -297,6 +298,8 @@ class 折叠数据(QTextBlockUserData):
 
 class 行号区(QWidget):
     #: 折叠三角占用的左边距（像素）。行号是右对齐的，两者不会打架。
+    #: 这是**初值**：按行号调整宽度 会按当前字体把它调成 16~28，
+    #: 行号栏的宽度里也照这个数留白，三角才不会压到数字上。
     折叠栏宽 = 16
 
     def __init__(self, 编辑器):
@@ -324,8 +327,15 @@ class 行号区(QWidget):
         位数 = max(3, len(str(max(1, 总行数))))
         fm = self.fontMetrics()
         数字宽 = fm.horizontalAdvance("8" * 位数)
-        # 10 = 右边距（paintEvent 里 drawText 用的是 宽度-10）
-        新宽 = max(28, 数字宽 + 10 + 8)
+        # 折叠栏跟着字号长：小字号 16px 够用，40 号字时三角要 24px 宽，
+        # 还按 16 算就会挤到行号上。上限 28，免得行号栏左边空一大块。
+        self.折叠栏宽 = max(16, min(28, fm.height() + 2))
+        # 10 = 右边距（paintEvent 里 drawText 用的是 宽度-10）；
+        # 左边要留够**整个折叠栏**，不是原来的 8px ——
+        # 行号右对齐后左端正好落在「宽度-10-数字宽」＝8，
+        # 而三角画在 2~16（大字号更宽），第一位数字被压在三角底下。
+        # 实测 9~40 号字全都重叠，40 号字时压掉 14px。
+        新宽 = max(28, 数字宽 + 10 + self.折叠栏宽)
         if 新宽 != self.宽度:
             self.宽度 = 新宽
             self.setFixedWidth(新宽)
@@ -362,12 +372,19 @@ class 行号区(QWidget):
             + 偏移
         )
 
+        当前号 = 编辑器.当前行号()
         while 块.isValid() and 顶 <= 事件.rect().bottom():
             高 = int(编辑器.blockBoundingRect(块).height())
             if 块.isVisible() and 顶 + 高 >= 事件.rect().top():
+                是当前 = 块.blockNumber() == 当前号
+                # 当前行的高亮带要**贯穿行号栏**。正文里那条带子画到
+                # 视口左边就断了，行号栏还是底色，看着像高亮少了半截；
+                # PyCharm / VS Code 都是整行连起来的。
+                if 是当前:
+                    绘.fillRect(0, 顶, self.宽度, 高, QColor(色["当前行"]))
                 # 当前行的行号用正文色，其余用行号灰（与 PyCharm 一致）；
                 # 眼睛跟着光标走时能立刻找到「我在第几行」。
-                if 块.blockNumber() == 编辑器.当前行号():
+                if 是当前:
                     绘.setPen(QPen(QColor(色["文本"])))
                 else:
                     绘.setPen(QPen(QColor(色["行号字"])))
@@ -398,7 +415,9 @@ class 行号区(QWidget):
         绘.setPen(Qt.NoPen)
         绘.setBrush(QColor(色.get(色键, 色["行号字"])))
         中 = 顶 + 高 // 2
-        半 = max(3, min(int(高 * 0.22), max(3, self.折叠栏宽 - 4)))
+        # 半宽上限按**折叠栏**算（栏宽随字号变），保证三角右缘始终
+        # 落在折叠栏内，不会压到右边的行号数字上。
+        半 = max(3, min(int(高 * 0.22), max(3, (self.折叠栏宽 - 4) // 2)))
         横 = 半 * 2          # 横向占的格数
         左 = max(2, (self.折叠栏宽 - 横) // 2)
         if 展开:
@@ -1240,6 +1259,12 @@ class 编辑器(QPlainTextEdit):
         self.行号.setGeometry(QRect(区.left(), 区.top(), self.行号.宽度, 区.height()))
 
     def 当前行号(self):
+        """光标所在块的**块号（0 起）**，不是给人看的行号。
+
+        名字有坑：`当前行列()` 返回的是 1 起的行/列（给状态栏用），
+        这个返回的是 QTextCursor.blockNumber()，直接喂 findBlockByNumber
+        才对。给它减 1 会整行错位（补当前行高亮边时踩过）。
+        """
         return self.textCursor().blockNumber()
 
     # —— 当前行高亮 + 缩进参考线 ——
@@ -1409,10 +1434,37 @@ class 编辑器(QPlainTextEdit):
 
     def paintEvent(self, 事件):
         super().paintEvent(事件)
+        self._补当前行边()
         # 用本地缓存，不直接读主窗：设置对话框里切线时主窗可能还没同步，
         # 而且每次重绘都读一次属性、勾选框关掉后要等下一帧才生效。
         if getattr(self, "_缩进线开", getattr(self.主窗, "显示缩进线", True)):
             self._画缩进线()
+
+    def _补当前行边(self):
+        """把当前行高亮带补到视口左右两端，让它和行号栏那条接上。
+
+        ExtraSelection 的 FullWidthSelection 只铺到**文档边距内侧**，
+        左右各留 documentMargin（4px）的底色。行号栏那边现在整条铺满了，
+        中间就多出两道 4px 的断口，看着像高亮带被切了一刀。
+        这两条边距里没有字形，补色不会盖住正文。
+        横向滚动过之后左边距里可能有字，那时只补右边。
+        """
+        边 = int(self.document().documentMargin())
+        if 边 <= 0:
+            return
+        块 = self.document().findBlockByNumber(self.当前行号())
+        if not 块.isValid() or not 块.isVisible():
+            return
+        矩 = self.blockBoundingGeometry(块).translated(self.contentOffset())
+        顶, 高 = int(矩.top()), int(矩.height())
+        if 高 <= 0:
+            return
+        色 = QColor(self.主窗.主题["当前行"])
+        宽 = self.viewport().width()
+        绘 = QPainter(self.viewport())
+        if self.horizontalScrollBar().value() == 0:
+            绘.fillRect(0, 顶, 边, 高, 色)
+        绘.fillRect(max(0, 宽 - 边), 顶, 边, 高, 色)
 
     def _画缩进线(self):
         """按行画缩进参考线。
@@ -1454,9 +1506,20 @@ class 编辑器(QPlainTextEdit):
             if 块.isVisible() and 顶 + 高 >= 0:
                 文 = 块.text()
                 if 文.strip():
-                    # 这行有几级缩进，就在它**外面**的层级画线
-                    前导 = len(文) - len(文.lstrip(" \t"))
-                    级 = 前导 // self.制表宽
+                    # 这行有几级缩进，就在它**外面**的层级画线。
+                    # 缩进要按**显示列**算，不能数字符：一个 \t 在屏幕上
+                    # 占一整个制表位（制表宽 4 时是 4 列），按字符算只有 1。
+                    # 以前 `前导 // 制表宽` 让「两个 Tab 缩进」算成 0 级，
+                    # 用 Tab 缩进的文件（外来代码、别人的项目）一条参考线都没有。
+                    列 = 0
+                    for 字 in 文:
+                        if 字 == " ":
+                            列 += 1
+                        elif 字 == "\t":
+                            列 += self.制表宽 - (列 % self.制表宽)
+                        else:
+                            break
+                    级 = 列 // self.制表宽
                     for i in range(1, 级):
                         x = 偏移 + 宽 * i
                         if x >= self.viewport().width():
@@ -1503,6 +1566,9 @@ class 编辑器(QPlainTextEdit):
     配对表 = {
         "(": ")", "[": "]", "{": "}", "'": "'", '"': '"',
         "（": "）", "【": "】", "｛": "｝",
+        # 「」是核语言自己的字符串定界符（核.扫描行 认它），
+        # 别的括号都配对了，唯独它不配 —— 打 「你好」 时右半边要自己敲。
+        "「": "」",
     }
 
     #: 自动配对插入的「右半边」在字符格式上的标记键。
@@ -1559,8 +1625,18 @@ class 编辑器(QPlainTextEdit):
         用户想要的是「在这里空一格」，得到的是整行位移。
         """
         游 = self.textCursor()
-        列 = 游.positionInBlock()
         宽 = max(1, int(getattr(self, "制表宽", 4) or 4))
+        # 按**显示列**算，不是字符个数：
+        #   · 行首有制表符时，一个 \t 占的是「到下一个制表位」那么多列；
+        #   · 中文/全角字符在等宽字体里占两列。
+        # 以前直接用 positionInBlock()（字符数），`甲 = 1` 后面按 Tab
+        # 补出来的空格数对不齐，中文越多歪得越明显。
+        列 = 0
+        for 字 in 游.block().text()[:游.positionInBlock()]:
+            if 字 == "\t":
+                列 += 宽 - (列 % 宽)
+            else:
+                列 += 2 if unicodedata.east_asian_width(字) in ("W", "F") else 1
         补 = 宽 - (列 % 宽)
         游.insertText(" " * 补)
         self.setTextCursor(游)
@@ -1668,6 +1744,9 @@ class 编辑器(QPlainTextEdit):
             起 = 游.selectionStart()
             止 = 游.selectionEnd()
             文档 = self.document()
+            # 两个符号算**一次**编辑：不加 edit block 的话，Ctrl+Z 只撤掉
+            # 后插的那一个，用户按一次撤销得到的是半个括号。
+            游.beginEditBlock()
             # 先插右边，再插左边，位置才不会互相影响
             尾 = QTextCursor(文档)
             尾.setPosition(止)
@@ -1675,6 +1754,7 @@ class 编辑器(QPlainTextEdit):
             头 = QTextCursor(文档)
             头.setPosition(起)
             头.insertText(左)
+            游.endEditBlock()
             # 恢复选中中间那段
             新 = QTextCursor(文档)
             新.setPosition(起 + 1)
@@ -1686,8 +1766,13 @@ class 编辑器(QPlainTextEdit):
         # 新字符会从左边继承格式，标记就污染到正常文字上了。
         标记 = QTextCharFormat()
         标记.setProperty(self._配对标记, 1)
+        # 一对括号 = 一次撤销。以前两次 insertText 是两个撤销步，
+        # 实测 `甲 = ` 按 ( 得到 `甲 = ()`，Ctrl+Z 之后剩 `甲 = (` ——
+        # 孤零零半个括号，还得再按一次才干净。
+        游.beginEditBlock()
         游.insertText(左)
         游.insertText(右, 标记)
+        游.endEditBlock()
         游.movePosition(QTextCursor.Left)
         self.setTextCursor(游)
 
@@ -1730,7 +1815,15 @@ class 编辑器(QPlainTextEdit):
     def _缩进选中行(self, 方向):
         光标 = self.textCursor()
         起 = self.document().findBlock(光标.selectionStart()).blockNumber()
-        止 = self.document().findBlock(光标.selectionEnd()).blockNumber()
+        止位 = 光标.selectionEnd()
+        止块 = self.document().findBlock(止位)
+        止 = 止块.blockNumber()
+        # 选区正好停在某一行**行首**时，那一行其实一个字都没被选中。
+        # 而「Shift+↓ 选中一整行」得到的选区恰恰就是这种形状 ——
+        # 以前把它也算进去，用户想缩进第 1 行，结果第 1、2 行一起缩了。
+        # 只有选区确实跨了行才退让，光标停在行首的单击不算。
+        if 光标.hasSelection() and 止 > 起 and 止位 == 止块.position():
+            止 -= 1
         游标 = self.textCursor()
         游标.beginEditBlock()
         空格 = " " * self.制表宽
@@ -1740,12 +1833,32 @@ class 编辑器(QPlainTextEdit):
             if 方向 > 0:
                 游.insertText(空格)
                 continue
+            # 退缩进：按**显示列**退掉最多一级，而不是只认「正好 4 个空格」
+            # 或「正好一个制表符」。以前不足一级的缩进（粘来的 2 空格代码、
+            # 手打不齐的 1/3 个空格）、全角空格、空格+制表符混排，
+            # Shift+Tab 一律没反应，用户只能手工删。
             文 = 块.text()
-            if 文.startswith(空格):
-                游.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, self.制表宽)
-                游.removeSelectedText()
-            elif 文.startswith("\t"):
-                游.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
+            删 = 0
+            列 = 0
+            for 字 in 文:
+                if 字 == "\t":
+                    宽 = self.制表宽 - (列 % self.制表宽)
+                elif 字 == " ":
+                    宽 = 1
+                elif 字 == "\u3000":
+                    宽 = 2
+                else:
+                    break
+                # 已经退掉一些、再退就超过一级了 → 到此为止。
+                # 制表符不能只删半个，所以整颗要么退要么留。
+                if 删 and 列 + 宽 > self.制表宽:
+                    break
+                列 += 宽
+                删 += 1
+                if 列 >= self.制表宽:
+                    break
+            if 删:
+                游.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 删)
                 游.removeSelectedText()
         游标.endEditBlock()
 
@@ -1968,7 +2081,10 @@ class 编辑器(QPlainTextEdit):
         if 区分大小写:
             旗 = QTextDocument.FindCaseSensitively
         次数 = 0
-        原游标 = self.textCursor()
+        # 原位置要存成**整数**。以前存的是 QTextCursor 对象 —— 它跟着
+        # 文档一起动，替换完之后读它的 position() 拿到的已经是被推走的
+        # 新位置，「放回原处」等于没放（实测光标 4 → 5）。
+        原位置 = self.textCursor().position()
         # 整段替换合成一个撤销步骤：用户按一次 Ctrl+Z 就该全部还原，
         # 而不是撤销 N 次。
         编辑 = self.textCursor()
@@ -1986,15 +2102,23 @@ class 编辑器(QPlainTextEdit):
         # 替换完把光标放回原处（找不到就放文首，避免停在半个词中间）。
         回收 = self.textCursor()
         try:
-            回收.setPosition(min(原游标.position(), len(self.toPlainText())))
+            回收.setPosition(min(原位置, len(self.toPlainText())))
         except (ValueError, TypeError):
             回收.movePosition(QTextCursor.Start)
         self.setTextCursor(回收)
         return 次数
 
     def 跳到行(self, 行号):
-        """跳到指定行（1 起）。"""
-        块 = self.document().findBlockByNumber(max(0, int(行号) - 1))
+        """跳到指定行（1 起）。行号非法或超出范围返回 False。"""
+        try:
+            号 = int(行号)
+        except (TypeError, ValueError):
+            return False
+        # 0 和负数不是合法行号。以前 max(0, 号-1) 把它们一律当成第 1 行，
+        # 用户输 0 也「跳成功」了，等于悄悄改了用户的要求。
+        if 号 < 1:
+            return False
+        块 = self.document().findBlockByNumber(号 - 1)
         if not 块.isValid():
             return False
         游 = QTextCursor(块)

@@ -115,8 +115,11 @@ class 查找对话框(QDialog):
         if not 词:
             return
         if 编.替换当前(词, self.替换框.text(), self.勾区分.isChecked()):
-            self.计数.setText("已替换 1 处")
-            self.查找下一个()
+            # 不能先写「已替换 1 处」再调 查找下一个() —— 后者会把计数
+            # 立刻改写成「已定位」，用户根本看不到替换成功的提示。
+            # 这里自己往下找一次，把两件事合成一句话说清楚。
+            还有 = 编.查找下一个(词, self.勾区分.isChecked())
+            self.计数.setText("已替换 1 处，已定位下一处" if 还有 else "已替换 1 处，没有更多了")
         else:
             self.计数.setText("没找到")
 
@@ -166,12 +169,24 @@ class 跳转对话框(QDialog):
             self.框.selectAll()
 
     def 跳(self):
+        文 = self.框.text().strip()
         try:
-            行 = int(self.框.text())
+            行 = int(文)
         except ValueError:
-            return
-        if self.编辑器 is not None and self.编辑器.跳到行(行):
+            行 = 0
+        编 = self.编辑器
+        if 编 is not None and 行 >= 1 and 编.跳到行(行):
             # close() 结束模态循环；deleteLater() 交给事件循环回收。
             # 直接 destroy() 在 exec() 里可能让循环拿不到返回值而卡住。
             self.close()
             self.deleteLater()
+            return
+        # 跳不过去要**说出来**。以前输错（空、字母、0、超出末行）时
+        # 什么都不发生：对话框不动、没有任何提示，用户以为按钮坏了。
+        总 = 编.document().blockCount() if 编 is not None else 0
+        提示 = ("行号要写 1 到 %d 之间的整数" % 总) if 总 else "先打开一个文件再跳转"
+        状态 = getattr(self.主窗, "状态", None)
+        if 状态 is not None:
+            状态(提示)
+        self.框.setFocus()
+        self.框.selectAll()

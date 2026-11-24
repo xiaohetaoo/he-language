@@ -136,6 +136,47 @@ class 转译测试(unittest.TestCase):
 
     # —— 以下为 0.0.13 的修复补测 ——
 
+    def test_自定义方法名与方法表同名(self):
+        """用户的方法叫「核取」时，定义侧和调用侧必须一致。
+
+        定义侧 `核定义 核取(self)` 保留中文（def 的名字一律不译），
+        调用侧 `甲().核取()` 以前却按方法表译成 `.get()` ——
+        运行必炸 AttributeError: '甲' object has no attribute 'get'。
+        """
+        源 = (
+            "核类 甲：\n"
+            "    核定义 核取（self）：\n"
+            "        核返回 5\n"
+            "核说（甲（）.核取（））\n"
+        )
+        产 = 转译(源)
+        self.assertIn("def 核取(self)", 产)
+        self.assertIn("甲().核取()", 产)
+        self.assertNotIn(".get()", 产)
+
+    def test_同名函数不影响模块成员(self):
+        """文件里有同名 def，也不能把 `核数学库.核正弦` 的属性段扣下来。"""
+        源 = (
+            "核导入 核数学库\n"
+            "核定义 核正弦（x）：\n"
+            "    核返回 x\n"
+            "核说（核数学库.核正弦（0））\n"
+        )
+        产 = 转译(源)
+        self.assertIn("import math", 产)
+        self.assertIn("math.sin(0)", 产)
+        别 = 转译(
+            "核导入 核数学库 核作为 数\n"
+            "核定义 核正弦（x）：\n"
+            "    核返回 x\n"
+            "核说（数.核正弦（0））\n"
+        )
+        self.assertIn("数.sin(0)", 别)
+
+    def test_普通方法照旧翻译(self):
+        """没有同名 def 时，方法表该怎么译还怎么译。"""
+        self.断言转译("核说（[1, 2].核数（1））", "print([1, 2].count(1))")
+
     def test_嵌套f字符串(self):
         """字段里再放一个中文 f-string 也要转对（PEP 701）。"""
         self.断言转译(
@@ -594,18 +635,21 @@ class 转译测试(unittest.TestCase):
         目录 = tempfile.mkdtemp(prefix="核语言删除复活_")
         路径 = os.path.join(目录, "未定义.txt")
         表头 = "# 清单\n"
-        open(路径, "w", encoding="utf-8").write(
-            表头 + "breakpoint\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
-                   "__import__\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
-        )
+        with open(路径, "w", encoding="utf-8") as f:
+            f.write(
+                表头 + "breakpoint\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+                       "__import__\t内置函数\t1\ta.xht:1:1\ta.xht:1:1\n"
+            )
         甲 = 内核.取报告(路径)
         self.assertIn(("breakpoint", "内置函数"), 甲.条目)
         # 模拟用户在大纲里删掉 breakpoint 那一行（时间戳要变）
         time.sleep(0.02)
-        保留 = open(路径, encoding="utf-8").read().splitlines()
-        open(路径, "w", encoding="utf-8").write(
-            "\n".join(l for l in 保留 if not l.startswith("breakpoint")) + "\n"
-        )
+        with open(路径, encoding="utf-8") as f:
+            保留 = f.read().splitlines()
+        with open(路径, "w", encoding="utf-8") as f:
+            f.write(
+                "\n".join(l for l in 保留 if not l.startswith("breakpoint")) + "\n"
+            )
         乙 = 内核.取报告(路径)
         self.assertIs(甲, 乙, "同一路径仍然必须是同一个实例")
         self.assertNotIn(("breakpoint", "内置函数"), 乙.条目, "用户删掉的记录必须真的消失")

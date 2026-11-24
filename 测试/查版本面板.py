@@ -103,10 +103,11 @@ def _等到(窗, 期望行数=None):
 # ---------------------------------------------------------------------------
 
 print("== 一、只读：面板里没有任何写操作入口 ==")
-源码 = open(
+with open(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "版本控制窗口.py"),
     encoding="utf-8",
-).read()
+) as f:
+    源码 = f.read()
 # 「暂存」「提交」这些词在面板源码里只应出现在说明文字中（比如
 # 「本面板只做展示，暂存/提交请去 git 客户端」），绝不能是命令调用。
 # 所以判据不是「有没有这个词」，而是「有没有 subprocess 调用这些子命令」。
@@ -117,10 +118,11 @@ print("== 一、只读：面板里没有任何写操作入口 ==")
     not any(名 in dir(版本控制) for 名 in ("提交", "推送", "暂存")),
 )
 # 取差异 里只该出现只读子命令。直接扫源码里 _跑(...) 用到的参数词。
-控制源码 = open(
+with open(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "版本控制.py"),
     encoding="utf-8",
-).read()
+) as f:
+    控制源码 = f.read()
 写命令 = [名 for 名 in ("add", "commit", "push", "reset", "checkout", "merge", "rebase", "stash")]
 检(
     "版本控制.py 里没有任何写操作的子命令",

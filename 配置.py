@@ -125,12 +125,19 @@ def _清洗配置(原):
 
 
 def 读配置():
-    """读配置。坏 JSON 或坏类型都回退默认，并通过 `上次问题` 留痕。"""
+    """读配置。坏 JSON 或坏类型都回退默认，并通过 `上次问题` 留痕。
+
+    **文件不存在不算「坏」**：第一次运行本来就没有配置文件。
+    以前 FileNotFoundError 也走同一条 except，于是全新安装第一次打开
+    就弹一句「有设置被重置成默认」—— 用户什么都没改过，纯属吓人。
+    """
     global 上次问题
     上次问题 = []
     try:
         with open(配置路径(), encoding="utf-8") as f:
             原 = json.load(f)
+    except FileNotFoundError:
+        return {}
     except Exception:
         上次问题 = [("(整个文件)", "读不出来或不是合法 JSON")]
         return {}

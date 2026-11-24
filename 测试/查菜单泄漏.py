@@ -84,4 +84,39 @@ if 增量 > 0:
 else:
     print("未发现 QAction 累积")
 
-sys.exit(1 if 增量 > 0 else 0)
+print()
+print("== 菜单里的快捷键提示与勾选态 ==")
+问题 = []
+菜单 = 窗._建主菜单()
+子 = {m.title(): m for m in 菜单.findChildren(type(菜单)) if m.title()}
+编辑 = 子.get("编辑")
+if 编辑 is None:
+    问题.append("找不到「编辑」子菜单")
+else:
+    有键 = {a.text(): a.shortcut().toString() for a in 编辑.actions() if a.text()}
+    for 名 in ("撤销", "重做", "剪切", "复制", "粘贴", "全选"):
+        if not 有键.get(名):
+            问题.append("「%s」菜单项没画快捷键" % 名)
+    if 有键.get("撤销") != "Ctrl+Z":
+        问题.append("撤销的键面不是 Ctrl+Z：%r" % 有键.get("撤销"))
+视图 = 子.get("视图")
+if 视图 is None:
+    问题.append("找不到「视图」子菜单")
+else:
+    主题项 = [a for a in 视图.actions() if a.text().endswith("主题")]
+    if len(主题项) != 2:
+        问题.append("视图里的主题项不是两条：%d" % len(主题项))
+    for a in 主题项:
+        if not a.isCheckable():
+            问题.append("「%s」不是可勾选动作" % a.text())
+        应勾 = a.text() == 窗.主题名 + "主题"
+        if a.isChecked() != 应勾:
+            问题.append("「%s」勾选态与实际主题不符" % a.text())
+菜单.deleteLater()
+应用.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+for 说明 in 问题:
+    print("  !!   %s" % 说明)
+if not 问题:
+    print("  ok   编辑项都画了快捷键，主题项勾选态正确")
+
+sys.exit(1 if (增量 > 0 or 问题) else 0)

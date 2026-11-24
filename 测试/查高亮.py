@@ -253,6 +253,79 @@ print("== 五之二、异常名口径与翻译器一致 ==")
 编 = 建('核说("核异常 值错误")' + chr(92) + "n")
 查不染(编, 0, 8, "异常名", "字符串里的 值错误 不染异常名")
 print()
+print("== 缩进参考线：Tab 缩进也要画 ==")
+# 回归：缩进级数按**字符数**算（前导 // 制表宽），一个 \t 只算 1 个字符，
+# 于是「三个 Tab 缩进」算成 0 级 —— 用 Tab 缩进的文件一条参考线都没有。
+# 现在按显示列算（\t 跳到下一个制表位），两种缩进画出来的线一样多。
+窗.resize(900, 600)
+窗.show()
+for _ in range(10):
+    应用.processEvents()
+
+
+def 数参考线(文本):
+    编 = 建(文本)
+    编.设制表宽(4)
+    for _ in range(8):
+        应用.processEvents()
+    图 = 编.viewport().grab().toImage()
+    目标 = QColor(窗.主题["缩进线"]).rgb()
+    return sum(
+        1
+        for y in range(图.height())
+        for x in range(图.width())
+        if 图.pixel(x, y) == 目标
+    )
+
+
+_空格 = 数参考线(
+    "核定义 f():\n    核若 1:\n        核若 2:\n            核说(1)\n"
+)
+_制表 = 数参考线(
+    "核定义 f():\n\t核若 1:\n\t\t核若 2:\n\t\t\t核说(1)\n"
+)
+print("  空格缩进 %d 像素 / Tab 缩进 %d 像素" % (_空格, _制表))
+if _空格 <= 0 or _制表 != _空格:
+    问题.append(("Tab 缩进的参考线没画出来（空格 %d / Tab %d）" % (_空格, _制表),))
+else:
+    print("  OK  两种缩进画出的参考线一致")
+
+print()
+print("== 当前行高亮要贯穿行号栏 ==")
+# 回归：高亮带只画在正文里，行号栏还是底色，看着像高亮少了半截；
+# 正文那侧又只铺到文档边距内侧，左右各留 4px 断口。
+# 现在行号栏整条铺满，正文左右边距也补齐，整行连成一条。
+编 = 建("".join("甲%d = %d\n" % (i, i) for i in range(40)))
+编.跳到行(12)
+for _ in range(10):
+    应用.processEvents()
+for _名 in ("深色", "浅色"):
+    窗.换主题(_名)
+    编.跳到行(12)
+    for _ in range(8):
+        应用.processEvents()
+    _栏图 = 编.行号.grab().toImage()
+    _体图 = 编.viewport().grab().toImage()
+    _望 = QColor(窗.主题["当前行"]).rgb()
+    _底 = QColor(窗.主题["行号底"]).rgb()
+    _行 = next((y for y in range(_栏图.height())
+                if _栏图.pixel(_栏图.width() - 2, y) == _望), None)
+    if _行 is None:
+        问题.append(("%s：行号栏没有当前行高亮带" % _名,))
+        continue
+    _中 = _行 + 3
+    _接上 = (_栏图.pixel(_栏图.width() - 1, _中) == _望
+             and _体图.pixel(1, _中) == _望)
+    print("  %s 行号栏 y=%d，与正文左缘相接：%s" % (_名, _行, _接上))
+    if not _接上:
+        问题.append(("%s：当前行高亮带在行号栏与正文之间断开" % _名,))
+    _别 = [y for y in range(_栏图.height()) if abs(y - _中) > 12][:20]
+    if not all(_栏图.pixel(_栏图.width() - 2, y) == _底 for y in _别):
+        问题.append(("%s：非当前行也被涂上了高亮色" % _名,))
+窗.换主题("深色")
+应用.processEvents()
+
+print()
 print("=" * 62)
 if 问题:
     print("发现 %d 处高亮问题：" % len(问题))

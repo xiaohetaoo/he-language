@@ -8,6 +8,7 @@
 启动：核 工坊     或     python 核工坊.py [文件.xht]
 """
 
+import codecs
 import json
 import os
 import queue
@@ -33,6 +34,7 @@ if 这里 not in sys.path:
 
 import 核 as 内核  # noqa: E402
 import 圆角  # noqa: E402
+import 配置  # noqa: E402   # 与 Qt 版共用：配置目录 / schema 清洗 / 原子写
 
 #: 打包成 exe 时由 启动器.py 填入自身路径；源码运行时为 None。
 宿主EXE = None
@@ -227,34 +229,36 @@ def 配置目录():
     打包成单文件后 sys._MEIPASS 是每次启动新建、退出即删的临时目录，
     配置写进去下次运行就读不到了（改的主题、字号全会丢）。
     所以打包版存到用户配置目录，源码版仍存在脚本目录，方便调试。
+
+    **统一走 配置.py**：Qt 版早就把这一套（含测试用的
+    核工坊_配置目录 覆盖、schema 清洗、原子写）收进那个模块了，
+    Tk 版却还留着自己的一份 —— 同一个 工坊配置.json 两套读法，
+    Qt 那边认为「坏字段丢掉」的输入，Tk 这边直接 int() 炸在启动里。
     """
-    if getattr(sys, "frozen", False):
-        基 = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(基, "核工坊")
-    return 这里
+    return 配置.配置目录()
 
 
 def 配置路径():
-    return os.path.join(配置目录(), "工坊配置.json")
+    return 配置.配置路径()
 
 
 def 读配置():
-    try:
-        with open(配置路径(), "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    """读配置。坏 JSON / 坏类型一律回退默认，绝不把异常抛到启动流程里。
+
+    以前这里是「json.load 成功就原样返回」，于是手改过的配置能让
+    主窗口.__init__ 直接崩：
+        字号="abc"  → ValueError: invalid literal for int()
+        字号=null   → TypeError: int() argument must be …
+        顶层是列表  → AttributeError: 'list' object has no attribute 'get'
+        窗口尺寸=123 → TypeError: argument of type 'int' is not iterable
+    （四种都实测复现过。）现在与 Qt 版共用同一份清洗规则。
+    """
+    return 配置.读配置()
 
 
-def 存配置(配置):
-    try:
-        目录 = 配置目录()
-        if not os.path.isdir(目录):
-            os.makedirs(目录, exist_ok=True)
-        with open(配置路径(), "w", encoding="utf-8") as f:
-            json.dump(配置, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+def 存配置(配置表):
+    """写配置。原子替换由 配置.py 负责，写到一半崩溃不会留下半截 JSON。"""
+    配置.存配置(配置表)
 
 
 def 规范化路径(p):
@@ -1001,6 +1005,7 @@ class 主窗口:
         self.当前 = None
         self.进程 = None
         self.输出队列 = queue.Queue()
+        self._输出解码 = codecs.getincrementaldecoder("utf-8")("replace")
         self.运行标记 = 0
         self._读线程 = None
         self.查找窗 = None
@@ -2510,7 +2515,7 @@ class 主窗口:
             self.状态("文件不存在：%s" % 路径)
             return None
         try:
-            内容 = 内核.读源码(路径)
+            内容, 编码 = 内核.读源码(路径, 返回编码=True)
         except OSError as e:
             self.状态("打不开文件：%s" % e)
             return None
@@ -2520,6 +2525,11 @@ class 主窗口:
             self.状态("这不是文本文件，打不开：%s" % os.path.basename(路径))
             return None
         文档 = 编辑器(self, 路径)
+        # 记住原编码与原行尾，保存时按原样写回（Qt 版 0.2.7 已修，这里跟上）。
+        # 不记的话：打开 GBK 文件改一个字保存 → 整份被转成 UTF-8，
+        # 打开 CRLF 文件改一个字保存 → 整份行尾变 LF，git 里「每行都改了」。
+        文档.编码 = 编码
+        文档.行尾 = "\r\n" if "\r\n" in 内容 else "\n"
         self.文档集.append(文档)
         文档.grid(row=0, column=0, sticky="nsew")
         文档.grid_remove()
@@ -2572,10 +2582,27 @@ class 主窗口:
             文本 = 文档.取文本()
             路径 = 文档.文件路径
             临时 = 路径 + ".核工坊.tmp"
-            with open(临时, "w", encoding="utf-8", newline="\n") as f:
-                f.write(文本)
-                f.flush()
-                os.fsync(f.fileno())
+            # 按**原编码 + 原行尾**写回。以前固定 utf-8 + newline="\n"：
+            # GBK 文件被悄悄转码、CRLF 文件被整份改成 LF。
+            编码 = getattr(文档, "编码", "utf-8") or "utf-8"
+            行尾 = getattr(文档, "行尾", "\n") or "\n"
+            出文 = 文本.replace("\r\n", "\n").replace("\r", "\n")
+            if 行尾 != "\n":
+                出文 = 出文.replace("\n", 行尾)
+            try:
+                with open(临时, "w", encoding=编码, newline="") as f:
+                    f.write(出文)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except UnicodeEncodeError:
+                # 原编码存不下新内容（往 GBK 里贴了 emoji 之类）。
+                # 不能默默换编码，要明说 —— 与 Qt 版同一口径。
+                with open(临时, "w", encoding="utf-8", newline="") as f:
+                    f.write(出文)
+                    f.flush()
+                    os.fsync(f.fileno())
+                文档.编码 = "utf-8"
+                self.状态("原编码 %s 存不下这些字符，已改用 UTF-8" % 编码)
             os.replace(临时, 路径)
         except OSError as e:
             try:
@@ -2628,10 +2655,21 @@ class 主窗口:
                 parent=self.根,
             ):
                 return False
+        # 先把归属记下来：保存失败要**整个还原**。
+        # 以前是先改 文档.文件路径 再保存，写失败（目标目录只读、
+        # 路径非法、磁盘满）时路径已经指向新位置了 —— 标签、标题、
+        # 下一次 Ctrl+S 全都对着那个根本没写成功的文件，
+        # 而用户以为「另存为没成功，还在原文件上」。Qt 版已修，这里跟上。
+        旧路径 = 文档.文件路径
+        旧已改 = 文档.已改
         文档.文件路径 = 路径
         ok = self.保存(文档, 弹窗=弹窗)
         if ok:
             self._加最近(文档.文件路径)
+        else:
+            文档.文件路径 = 旧路径
+            文档.已改 = 旧已改
+            self.刷新标签(文档)
         return ok
 
     def 保存当前文档(self):
@@ -3018,6 +3056,11 @@ class 主窗口:
         self.当前运行文件 = 文件路径
         self.运行标记 += 1
         标记 = self.运行标记
+        # 每轮换一个**增量**解码器：read1 按字节切，一个汉字的 3 个字节
+        # 可能被 64KB 边界劈开，逐块 decode("utf-8","replace") 会把那半个字
+        # 变成两个替换符（Qt 版实测 12 万字输出丢 4 个词）。这里攒着半截
+        # 字节等下一块，跨块的字才拼得回来。
+        self._输出解码 = codecs.getincrementaldecoder("utf-8")("replace")
 
         def 读(进程对象):
             """读子进程输出，做到「有字就立刻显示」。
@@ -3088,7 +3131,7 @@ class 主窗口:
                     continue
                 if 标记 != self.运行标记:
                     continue
-                self.控制台追加(块.decode("utf-8", "replace"))
+                self.控制台追加(self._输出解码.decode(块))
                 数量 += 1
             return 数量
 
@@ -3124,7 +3167,13 @@ class 主窗口:
             self._已退出 = True
 
     def _收尾进程(self, 进程):
-        """关闭子进程的管道，避免句柄泄漏。"""
+        """关闭子进程的管道并收尸，避免句柄泄漏。
+
+        收尸这一步不能省：Popen 的 returncode 只有 poll()/wait() 才会填。
+        只关流就把引用置 None 的话，对象被回收时 subprocess 会报
+        「subprocess NNNN is still running」的资源警告，Windows 上
+        进程句柄也一直挂着。Qt 版（_收尾）已修，这里跟上。
+        """
         if 进程 is None:
             return
         for 流名 in ("stdin", "stdout", "stderr"):
@@ -3135,6 +3184,17 @@ class 主窗口:
                 流.close()
             except (OSError, ValueError):
                 pass
+        # 走到这里的进程要么自然结束、要么刚被杀过，正常立刻返回；
+        # 给 0.5 秒兜底，等不到就 poll 一下，不强等。
+        try:
+            进程.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                进程.poll()
+            except (OSError, ValueError):
+                pass
+        except (OSError, ValueError):
+            pass
 
     def _刷新未定义提示(self):
         路径 = os.path.join(self.项目目录, 内核.未定义文件名)
@@ -3376,7 +3436,15 @@ class 主窗口:
             选中 = 0
         附加 = "  ⧉%d" % 选中 if 选中 else ""
         self.位置信息.configure(text="行 %s，列 %s%s" % (行, int(列) + 1, 附加))
-        self.编码信息.configure(text="UTF-8")
+        self.编码信息.configure(
+            text="%s %s" % (
+                (getattr(编, "编码", "utf-8") or "utf-8")
+                .replace("utf-8-sig", "UTF-8 BOM").replace("utf-8", "UTF-8")
+                .replace("gbk", "GBK").replace("utf-16", "UTF-16")
+                .replace("utf-32", "UTF-32"),
+                "CRLF" if getattr(编, "行尾", "\n") == "\r\n" else "LF",
+            )
+        )
         self.缩进信息.configure(text="空格 %d" % self.制表宽)
         self.语言信息.configure(text="核语言")
         self._更新面包屑(编, 行)

@@ -109,6 +109,59 @@ def 主():
     检查(窗.进程 is None, "停止后进程已清理")
     检查("[已停止]" in 窗.控制台.toPlainText(), "控制台显示已停止")
 
+    print("[停止之后不留没收回的子进程]")
+    # 回归：_收尾 以前杀完直接把 self.进程 置 None，从没调过 poll()/wait()。
+    # Popen 的 returncode 一直是 None，对象被回收时 subprocess 就报
+    # 「subprocess NNNN is still running」的资源警告，Windows 上进程句柄
+    # 也一直挂着。现在 _收尾 里补了 wait(timeout=0.5) 收尸。
+    import gc
+    import warnings
+    窗.打开(慢)
+    应用.processEvents()
+    窗.运行()
+    for _ in range(40):
+        应用.processEvents()
+        time.sleep(0.02)
+    with warnings.catch_warnings(record=True) as 收到的警告:
+        warnings.simplefilter("always", ResourceWarning)
+        窗.停止()
+        for _ in range(30):
+            应用.processEvents()
+            time.sleep(0.02)
+        gc.collect()
+    子进程警告 = [w for w in 收到的警告
+                  if issubclass(w.category, ResourceWarning)
+                  and "subprocess" in str(w.message)]
+    检查(not 子进程警告,
+         "停止后没有「子进程还在跑」的资源警告（实际 %d 条）" % len(子进程警告))
+
+    print("[大段中文输出不出现替换符]")
+    # 回归：_读输出 以前每块各自 decode("utf-8","replace")，
+    # read1 按字节切，一个汉字的 3 字节被 64KB 边界劈开就变成两个 。
+    # 实测一行 12 万字的中文输出：旧写法 10 个替换符、丢 4 个「核语言」；
+    # 改成增量解码器后 0 个、40000 个一个不少。
+    巨 = os.path.join(目录, "巨行.xht")
+    with open(巨, "w", encoding="utf-8", newline="\n") as f:
+        f.write('核说("核语言" * 40000, 核尾="")\n')
+    窗.打开(巨)
+    窗.控制台.setMaximumBlockCount(0)
+    应用.processEvents()
+    窗.运行()
+    截止 = time.time() + 60
+    while time.time() < 截止:
+        应用.processEvents()
+        time.sleep(0.01)
+        if 窗.进程 is None or 窗.进程.poll() is not None:
+            break
+    for _ in range(80):
+        应用.processEvents()
+        time.sleep(0.02)
+    巨文 = 窗.控制台.toPlainText()
+    检查("\ufffd" not in 巨文, "大段中文输出没有替换符（增量解码）")
+    检查(巨文.count("核语言") == 40000,
+         "40000 个「核语言」一个不少（实际 %d）" % 巨文.count("核语言"))
+    窗.控制台.setMaximumBlockCount(6000)
+
     print("[编辑功能]")
     编3 = 窗.新建()
     编3.置文本("x = 1\ny = 2\n")

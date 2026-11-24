@@ -56,7 +56,7 @@ def 主():
     import 核工坊
 
     # 显式导入一次，让 PyInstaller 的静态分析能把它打进 exe
-    for 模块名 in ("拖放", "圆角", "设置窗口"):
+    for 模块名 in ("拖放", "圆角", "设置窗口", "配置"):
         try:
             __import__(模块名)
         except ImportError:
@@ -251,8 +251,6 @@ def _截自己(窗口, 输出):
         ctypes.windll.gdi32.DeleteObject(位图)
         ctypes.windll.gdi32.DeleteDC(内存)
         u.ReleaseDC(句柄, 屏幕)
-        根.attributes("-topmost", False)
-        return {"路径": 输出, "宽": 宽, "高": 高}
         根.attributes("-topmost", False)
         return {"路径": 输出, "宽": 宽, "高": 高}
     except Exception as e:  # noqa: BLE001

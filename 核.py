@@ -24,7 +24,7 @@ import traceback
 import unicodedata
 
 #: 当前版本号。每次发布递增，并把整套源码归档到 版本/ 目录（见 版本记录.md）。
-版本 = "0.2.8"
+版本 = "0.2.9"
 程序名 = "核语言"
 
 扩展名 = ".xht"
@@ -403,6 +403,13 @@ read readline readlines write writelines close seek tell flush
     "网络库": "urllib.request",
 }
 
+#: 模块表里的英文名（math / os …），判断「点号左边是不是模块」时用。
+_模块英文名 = frozenset(模块表.values())
+#: `核导入 X 核作为 Y` / `import X as Y`，取模块名与别名两段。
+_导入别名 = re.compile(
+    r"(?:核导入|import)\s+([^\s.,()]+)(?:\s+(?:核作为|as)\s+([^\s.,()]+))?"
+)
+
 #: —— 标准库：成员名（函数与常数）——
 #:
 #: 这些名字有两个位置可用：
@@ -750,12 +757,48 @@ def 是核核注释(s, i):
     if t < n and s[t] in _表达式续接:
         # 名字后面接表达式续接符 —— 它是变量/函数名，不是注释
         return False
+    # —— 看**前面**是什么（P1-1 补） ——
+    #
+    # 中文注释里出现「核是 / 核在 / 核和」这些词是很自然的：
+    #     甲 = 1 核核这里 核是 计数器
+    # 只看「名字后面跟了个中文关键词」会把它判成表达式，产物落成
+    # `甲 = 1 核核这里 is 计数器` —— 一行合法代码被改成语法错误。
+    #
+    # Python 里两个表达式之间不能只隔空格，所以「前面已经是一段写完的
+    # 代码」时，后面跟的只可能是注释。反过来，前面是**引导词**
+    # （核返回 / 核若 / 核用 …）或**运算符/开括号**时，这里必然是表达式：
+    #     核返回 核核甲      核若 甲 核和 核核乙:      核说(甲, 核核乙)
+    行首 = s.rfind("\n", 0, i) + 1
+    前文 = s[行首:i].rstrip(" \t\u3000")
+    if 前文:
+        if 前文[-1] in "([{,=+-*/%<>!&|^~":
+            return False
+        尾 = len(前文)
+        头 = 尾
+        while 头 > 0 and 是标识符字符(前文[头 - 1]):
+            头 -= 1
+        if 头 < 尾 and 前文[头:尾] in 关键词表:
+            return False
+        # 前面是一段写完的代码 → 这里只能是行尾注释
+        return True
     # 中文运算符（核在 / 核和 / 核是 …）同样说明前面那个名字在表达式里。
     # 这一条是为了 `核核甲 核在 (1, 2)` 这类全中文表达式 —— 中间没有
-    # 任何 ASCII 符号可以依靠。
+    # 任何 ASCII 符号可以依靠。只在**行首**（前面没有别的代码）时才认，
+    # 否则行尾注释里的中文词会把它带偏。
+    #
+    # 而且还要看关键词**后面**跟的是什么：
+    #     核核甲 核在 (1, 2)      → 后面是 ASCII 的 ( ，是表达式
+    #     核核这里 核是 计数器     → 后面是中文词，这是一句注释
+    # 「核核这里 核是 计数器」是很自然的中文说明，而单独一行
+    # `核核甲 核是 计数器` 作为表达式语句毫无意义 —— 判成注释才对。
     for 词 in 关键词表:
         if s.startswith(词, t):
-            return False
+            u = t + len(词)
+            while u < n and s[u] in " \t\u3000":
+                u += 1
+            if u < n and s[u] in "([{\"'-+0123456789":
+                return False
+            return True
     return True
 
 
@@ -1034,14 +1077,35 @@ class 未定义报告:
     def 保存(self):
         if not self.路径:
             return
+        # 一条记录都没有、磁盘上也还没有这份清单时，**不要凭空建一个空文件**。
+        # 运行/检查/F9 每次都会在 finally 里调保存，以前哪怕程序完全正常，
+        # 也会在用户每个项目目录里留下一个只有表头的 未定义.txt。
+        if not self.条目 and not os.path.exists(self.路径):
+            return
+        数据行 = [
+            "%s\t%s\t%d\t%s\t%s"
+            % (key[0], key[1], self.条目[key]["次数"],
+               self.条目[key]["首次"], self.条目[key]["最近"])
+            for key in sorted(self.条目, key=lambda k: (类别序.get(k[1], 9), k[0]))
+        ]
+        # 内容没变就别重写：表头里带「最近更新」时间戳，每跑一次都写一遍的话
+        # 文件 mtime 一直在动 —— 版本控制里看着像「这份清单又改了」，
+        # 实际上一个字的记录都没变。
+        try:
+            with open(self.路径, "r", encoding="utf-8") as f:
+                旧数据行 = [
+                    行.rstrip("\r\n") for 行 in f
+                    if 行.strip() and not 行.startswith("#")
+                ]
+        except OSError:
+            旧数据行 = None
+        if 旧数据行 == 数据行:
+            self._已见签名 = self._磁盘签名()
+            return
         行集 = list(报告头)
         行集.append("# 最近更新：%s" % time.strftime("%Y-%m-%d %H:%M:%S"))
         行集.append("")
-        for key in sorted(self.条目, key=lambda k: (类别序.get(k[1], 9), k[0])):
-            e = self.条目[key]
-            行集.append(
-                "%s\t%s\t%d\t%s\t%s" % (key[0], key[1], e["次数"], e["首次"], e["最近"])
-            )
+        行集.extend(数据行)
         临时 = self.路径 + ".tmp"
         try:
             目录 = os.path.dirname(os.path.abspath(self.路径))
@@ -1507,11 +1571,14 @@ def _切分字段(字段):
 
 
 class 转译器:
-    def __init__(self, 文件名="<源码>", 报告=None, 行=1, 列=1, 绑定名=None):
+    def __init__(self, 文件名="<源码>", 报告=None, 行=1, 列=1, 绑定名=None,
+                 定义名=None):
         self.文件名 = 文件名
         # 全文件扫出来的绑定名（见 扫绑定名）。用 frozenset 是为了
         # 逐字符翻译时每次 `in` 都是 O(1) —— 这个判断在每个标识符上都要走。
         self.绑定名 = 绑定名 if 绑定名 is not None else frozenset()
+        # def/class 定义出来的名字，点号后面也要保住（见 扫定义名）。
+        self.定义名 = 定义名 if 定义名 is not None else frozenset()
         self.报告 = 报告
         self.行 = 行
         self.列 = 列
@@ -1667,8 +1734,15 @@ class 转译器:
 
     @staticmethod
     def _前一个有效字符(s, i):
+        # 换行也要跳过：跨行调用里关键字实参常常自己占一行
+        #     核说(
+        #         甲,
+        #         核尾="",
+        #     )
+        # 只跳 " \t\r" 时，核尾 前面拿到的是 "\n"，判不成参数，
+        # 产物保留中文 `核尾=` → TypeError: unexpected keyword argument。
         k = i - 1
-        while k >= 0 and s[k] in " \t\r":
+        while k >= 0 and s[k] in " \t\r\n\u3000":
             k -= 1
         return s[k] if k >= 0 else ""
 
@@ -1811,6 +1885,34 @@ class 转译器:
             return True
         return self._后面是点(s, j)
 
+    def _点前是模块(self, s, i):
+        """i 处这个属性段，点号左边是不是一个模块名（含 import 别名）。
+
+        用来把「用户对象的同名方法」和「模块成员」分开：
+            甲().核取      → 左边是调用，不是模块 → 保住用户的方法名
+            核数学库.核正弦 → 左边是模块         → 照译成 math.sin
+        """
+        k = i - 1
+        while k >= 0 and s[k] in " \t　":
+            k -= 1
+        if k < 0 or s[k] != ".":
+            return False
+        k -= 1
+        while k >= 0 and s[k] in " \t　":
+            k -= 1
+        止 = k + 1
+        while k >= 0 and 是标识符字符(s[k]):
+            k -= 1
+        名 = s[k + 1:止]
+        if not 名:
+            return False
+        if 名 in 模块表 or 名 in _模块英文名:
+            return True
+        for 匹 in _导入别名.finditer(s):
+            if 名 == 匹.group(1) or 名 == 匹.group(2):
+                return True
+        return False
+
     def _在导入位置(self, s, i):
         """当前名字是不是跟在 `核导入` / `核从` 之后（import 语句的一部分）。
 
@@ -1893,6 +1995,13 @@ class 转译器:
             return 模块表[名字]
 
         if self.上一个是点:
+            # 用户自己 def/class 出来的名字：定义侧保留中文，属性段也得保留，
+            # 否则 `核定义 核取(self)` + `甲().核取()` 会变成
+            # `def 核取` + `.get()`，运行必炸（见 扫定义名）。
+            # 但点号左边是**模块**时不算：`核数学库.核正弦` 里的 核正弦
+            # 是 math 的成员，哪怕文件里正好有个同名函数也要照译。
+            if 名字 in self.定义名 and not self._点前是模块(s, i):
+                return 名字
             if 名字 in 库成员表:
                 return 库成员表[名字]
             if 名字 in 方法表:
@@ -2000,7 +2109,7 @@ class 转译器:
                 # 函数参数、函数局部变量同理（它们都只在外层可见）。
                 译 = 转译(
                     表达式, self.文件名, self.报告, cur行, cur列 + 1,
-                    绑定名=self.绑定名,
+                    绑定名=self.绑定名, 定义名=self.定义名,
                 )
                 # 后缀（格式说明）里还可能嵌着替换字段 {…}，见 _处理格式后缀
                 if 后缀:
@@ -2049,7 +2158,7 @@ class 转译器:
                 表达式, 内后缀 = _切分字段(内层)
                 译 = 转译(
                     表达式, self.文件名, self.报告, self.行, self.列,
-                    绑定名=self.绑定名,
+                    绑定名=self.绑定名, 定义名=self.定义名,
                 )
                 if 内后缀:
                     内后缀 = self._处理f内容后缀(内后缀)
@@ -2148,6 +2257,51 @@ def 只由左值字符组成(前缀):
     return bool(前缀)
 
 
+def _取参数段(行文, 起点, 受保护):
+    """取出 `核定义 名(...)` 参数表里**顶层逗号**分开的那几段。
+
+    以前是 `行文.find(")")` 找第一个右括号、再按所有逗号切：
+        核定义 f(cb=(核正弦, 核余弦)):
+    第一个 `)` 是默认值里那个，切出来的第二段是 `核余弦` —— 它被当成
+    参数名收进绑定集，于是默认值里的 `核余弦` 不再译成 cos，
+    产物 `def f(cb=(sin, 核余弦))` 一运行就 NameError。
+    这里按括号深度配对、只切顶层逗号，字符串与注释里的符号一概跳过。
+    """
+    括号起 = -1
+    for k in range(起点, len(行文)):
+        if 受保护(k):
+            continue
+        c = 行文[k]
+        if c == "(":
+            括号起 = k
+            break
+        if c in ":：":
+            return []
+    if 括号起 < 0:
+        return []
+    深 = 0
+    段起 = 括号起 + 1
+    段们 = []
+    for k in range(括号起, len(行文)):
+        if 受保护(k):
+            continue
+        c = 行文[k]
+        if c in "([{":
+            深 += 1
+        elif c in ")]}":
+            深 -= 1
+            if 深 == 0:
+                段们.append(行文[段起:k])
+                return 段们
+        elif c == "," and 深 == 1:
+            段们.append(行文[段起:k])
+            段起 = k + 1
+    # 括号跨行没闭合：本行能认出的那几段照样收，剩下的交给下一行
+    if 行文[段起:].strip():
+        段们.append(行文[段起:])
+    return 段们
+
+
 def 扫绑定名(s):
     """先扫一遍，收集全文件的「绑定名」。
 
@@ -2214,17 +2368,14 @@ def 扫绑定名(s):
                 # `核类 狗(核对象)` 一直正常，是因为 核对象 走内置表，
                 # 不是模块表 —— 正好掩盖了这个洞。
                 if 引导 == "核定义":
-                    括号起 = 行文.find("(", 起点)
-                    括号止 = 行文.find(")", 起点)
-                    if 0 < 括号起 < 括号止:
-                        for 段 in 行文[括号起 + 1:括号止].split(","):
-                            段 = 段.strip()
-                            段 = 段.split("=")[0].strip()  # 默认值参数
-                            段 = 段.split(":")[0].strip()  # 注解参数
-                            段 = 段.lstrip("*")  # *args / **kwargs
-                            位 = 行文.find(段, 括号起)
-                            if 段 and 段.isidentifier() and 位 >= 0 and not 受保护(位):
-                                绑定.add(段)
+                    for 段 in _取参数段(行文, 起点, 受保护):
+                        段 = 段.strip()
+                        段 = 段.split("=")[0].strip()  # 默认值参数
+                        段 = 段.split(":")[0].strip()  # 注解参数
+                        段 = 段.lstrip("*")  # *args / **kwargs
+                        位 = 行文.find(段, 起点)
+                        if 段 and 段.isidentifier() and 位 >= 0 and not 受保护(位):
+                            绑定.add(段)
 
         # —— 语句开头紧跟 `=` 或复合赋值 ——
         i = 0
@@ -2255,6 +2406,56 @@ def 扫绑定名(s):
                 continue
             i += 1
     return 绑定
+
+
+def 扫定义名(s):
+    """收集 `核定义 X` / `核类 X` 定义出来的名字（只这两类，不含变量/参数）。
+
+    为什么要和 扫绑定名 分开：两者在**点号后面**的待遇正好相反。
+
+      · 变量、参数绑的名字：只保护裸名，属性段照译。
+        `核定义 取(核正弦)` 之后写 `核数学库.核正弦(0)` 仍要译成 math.sin。
+      · def/class 定义的名字：**定义侧本来就保留中文**
+        （`核定义 核取():` 产物就是 `def 核取():`），那么点号后面的
+        同名属性段也必须保留，否则两边对不上：
+
+            核类 甲:
+                核定义 核取(self): 核返回 5
+            核说(甲().核取())
+            → class 甲: def 核取(self) …  print(甲().get())
+            → AttributeError: '甲' object has no attribute 'get'
+
+        用户给自己的方法起「核取 / 核加入 / 核数 / 核找」这类名字太自然了，
+        而它们恰好都在方法表里，一用就炸。
+    """
+    定义 = set()
+    起始引号 = None
+    for 行文 in s.split("\n"):
+        串区, 注释起, 起始引号 = 扫描行(行文, 起始引号)
+        for 引导 in ("核定义", "核类"):
+            处 = 0
+            while True:
+                处 = 行文.find(引导, 处)
+                if 处 < 0:
+                    break
+                起点 = 处 + len(引导)
+                处 = 起点
+                if not (词左界(行文, 处 - len(引导)) and 词右界(行文, 起点)):
+                    continue
+                if any(起 <= 处 - len(引导) < 止 for 起, 止 in 串区):
+                    continue
+                if 注释起 is not None and 注释起 >= 0 and 处 - len(引导) >= 注释起:
+                    continue
+                k = 起点
+                while k < len(行文) and 行文[k] in " \t　":
+                    k += 1
+                起 = k
+                while k < len(行文) and 是标识符字符(行文[k]):
+                    k += 1
+                名 = 行文[起:k]
+                if 名 and 名.isidentifier():
+                    定义.add(名)
+    return 定义
 
 def _补一行异常括号(行文, 串区, 注释起):
     """给一行的 `核异常 A, B：` / `核抛出 A, B` 补上括号。
@@ -2367,7 +2568,7 @@ def 补异常括号(s):
         结果.append(_补一行异常括号(行文, 串区, 注释起))
     return "\n".join(结果)
 
-def 转译(源码, 文件名="<源码>", 报告=None, 行=1, 列=1, 绑定名=None):
+def 转译(源码, 文件名="<源码>", 报告=None, 行=1, 列=1, 绑定名=None, 定义名=None):
     """把核语言源码转译成 Python 源码，行号保持不变。
 
     `绑定名` 是「全文件范围内被赋过值的名字」集合（见 扫绑定名）。
@@ -2387,7 +2588,9 @@ def 转译(源码, 文件名="<源码>", 报告=None, 行=1, 列=1, 绑定名=No
     # 看不到同一个名字在别处是不是被赋过值（见 扫绑定名 的说明）。
     if 绑定名 is None:
         绑定名 = 扫绑定名(规范)
-    return 转译器(文件名, 报告, 行, 列, 绑定名).转译(规范)
+    if 定义名 is None:
+        定义名 = 扫定义名(规范)
+    return 转译器(文件名, 报告, 行, 列, 绑定名, 定义名).转译(规范)
 
 
 # ---------------------------------------------------------------------------
@@ -2427,6 +2630,27 @@ def 读源码(路径, 返回编码=False, 严格=False):
     """
     with open(路径, "rb") as f:
         数据 = f.read()
+    # —— UTF-16 / UTF-32 先认 BOM ——
+    # 记事本的「Unicode」「Unicode big endian」存出来就是这两种，
+    # 中文 Windows 上初学者很容易选到。以前只认 UTF-8 BOM，这类文件
+    # 会掉进 GBK / 替换符分支，读出来每隔一个字符夹一个 NUL，
+    # 编译时报一句英文 `source code string cannot contain null bytes`，
+    # 用户完全不知道是「编码选错了」。
+    # UTF-32 的 BOM 以 FF FE 开头，必须排在 UTF-16 前面判。
+    for BOM, 编码 in (
+        (b"\xff\xfe\x00\x00", "utf-32"),
+        (b"\x00\x00\xfe\xff", "utf-32"),
+        (b"\xff\xfe", "utf-16"),
+        (b"\xfe\xff", "utf-16"),
+    ):
+        if 数据.startswith(BOM):
+            try:
+                文本 = 数据.decode(编码)
+            except UnicodeDecodeError:
+                # 别 break：FF FE 既是 UTF-32LE 的 BOM 也是 UTF-16LE 的，
+                # 按 UTF-32 解不开时还要让下面的 UTF-16 再试一次。
+                continue
+            return (文本, 编码) if 返回编码 else 文本
     有BOM = 数据.startswith(b"\xef\xbb\xbf")
     顺序 = ("utf-8-sig",) if 有BOM else ("utf-8", "gbk")
     for 编码 in 顺序:
@@ -2450,6 +2674,12 @@ def _语法线索(原因):
     只认最常撞上的几条。没命中就返回空串，不硬凑。
     """
     原因 = 原因 or ""
+    if "null bytes" in 原因:
+        return (
+            "文件里混进了 NUL（\\x00）字节，通常不是编码选错就是拿错了文件：\n"
+            "        记事本另存为时选「UTF-8」，不要选「Unicode」；"
+            "也别把 .exe / 图片这类二进制文件当源码打开。"
+        )
     # 未闭合引号的几种英文说法：普通串 / f 串 / 三引号串。
     # 以前只认 "unterminated string"，而 Python 对 f 串报的是
     # `unterminated f-string literal`、对三引号报的是
@@ -2533,10 +2763,30 @@ def 显示运行错误(e, 源码, 文件名, 流=None):
         流.write("  提示：%s\n" % 说明)
     # 「TypeError: 'xxx' object is not callable」多半是把内置名当变量赋值了，
     # 例如写了 `核说 = 3`，之后 `核说（...）` 就会这样。这里点明一下。
-    提示 = _覆盖内置的线索(e, 源码) or _库线索(e)
+    提示 = _覆盖内置的线索(e, 源码) or _抛出并列的线索(e) or _库线索(e)
     if 提示:
         流.write("  线索：%s\n" % 提示)
     流.flush()
+
+
+def _抛出并列的线索(e):
+    """`核抛出 值错误, 类型错误` 这种写法运行时必炸，给一句能照着改的话。
+
+    转译器会给它补上括号变成 `raise (ValueError, TypeError)` —— 语法过得去，
+    但 Python 只接受**一个**异常，运行时抛
+    `TypeError: exceptions must derive from BaseException`。
+    这句英文既没说是哪一行写错、也没说该怎么改，用户完全无从下手。
+    """
+    if type(e).__name__ != "TypeError":
+        return ""
+    if "exceptions must derive from BaseException" not in str(e):
+        return ""
+    return (
+        "一次只能抛出一个异常。`核抛出 值错误, 类型错误` 会被当成一个元组，"
+        "Python 不接受。\n"
+        "        想按情况抛不同的异常，用 核若 / 核否则 分开写；"
+        "只抛一个就写 `核抛出 值错误(\"说明\")`。"
+    )
 
 
 def _覆盖内置的线索(e, 源码):
@@ -2891,7 +3141,12 @@ def 交互模式():
         译 = 源
         try:
             译 = 转译(源, "<交互>", 临时)
-            代码 = 编译命令(译, "<交互>", "exec")
+            # 用 "single" 而不是 "exec"：交互模式里敲一个表达式就该看到它的值。
+            # exec 模式只执行不回显 —— 用户在 核> 后面写 `1 + 1`、`甲`、
+            # `核长度("abc")` 全都没有任何输出，看着像解释器卡住了。
+            # "single" 走的正是 Python 自带 REPL 那条路（sys.displayhook 回显），
+            # 复合语句照样支持，赋值/定义这类没有值的语句仍然不打印。
+            代码 = 编译命令(译, "<交互>", "single")
         except SyntaxError as e:
             显示语法错误(源, 译, e, "<交互>")
             缓冲 = []
