@@ -9,11 +9,19 @@ name: 回归测试
 # 不打包、不发版 —— 那是本地用 测试/打包Qt.py + 测试/发布Release.py 做的，
 # 需要 PyInstaller、几分钟时间和令牌，不适合塞进每次提交。
 #
-# ⚠️ **job 的键名必须是 ASCII**（字母/数字/`_`/`-`，且以字母或 `_` 开头）。
-# 第一版写的是 `全量回归:`，GitHub 把它存成 active 却永远跑不起来：
-# `gh workflow run` 直接报 422 "The identifier '全量回归' is invalid"，
-# 而 push 触发的运行数一直是 0 —— 表面有 CI，实际一条都没跑过。
-# 中文只能出现在 `name:` 这类**显示用**字段里。
+# ⚠️ 两处踩过的坑（都是「静默失效」，不报错，只是永远不跑）：
+#
+# 1. **文件名必须是 ASCII**。本文件原名 `测试.yml`，GitHub 能解析、能手动
+#    跑，但 push 触发**永远不生效**（runs 一直是 0，没有任何报错）。
+#    改名 `ci.yml` 后立刻正常 —— 中文只能出现在文件内容里。
+#
+# 2. **job 的键名必须是 ASCII**（字母/数字/`_`/`-`，以字母或 `_` 开头）。
+#    第一版 job 键写成 `全量回归:`，GitHub 把它存成 active 却跑不起来：
+#    `gh workflow run` 直接报 422 "The identifier '全量回归' is invalid"。
+#    中文字样只能用在 `name:` 这类**显示用**字段里。
+#
+# 排查口诀：`gh api repos/<owner>/<repo>/actions/workflows` 能看到文件、
+# 但 `.../actions/runs` 的 total_count 一直是 0 —— 就是这两条之一。
 
 on:
   push:
