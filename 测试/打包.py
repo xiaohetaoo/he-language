@@ -35,7 +35,7 @@ def 确保图标(根目录):
         print("缺少图标文件：%s" % "、".join(缺))
         return False
     print("图标不全（缺 %d 个），正在生成…" % len(缺))
-    结果 = subprocess.run([找解释器(), 生成], cwd=根目录)
+    结果 = subprocess.run([找解释器(), 生成], cwd=根目录, timeout=120)
     return 结果.returncode == 0
 
 
@@ -114,7 +114,7 @@ def 主():
     命令.append(os.path.join(根目录, "启动器.py"))
 
     print("执行：\n  " + " \\\n  ".join(命令))
-    结果 = subprocess.run(命令, cwd=根目录)
+    结果 = subprocess.run(命令, cwd=根目录, timeout=1800)
     if 结果.returncode != 0:
         print("打包失败，返回码 %s" % 结果.returncode)
         return 结果.returncode

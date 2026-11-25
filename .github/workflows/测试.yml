@@ -1,0 +1,56 @@
+name: 回归测试
+
+# 为什么要有这个文件：
+# 仓库里有 30 套测试、全量跑一遍只要 ~70 秒，但此前没有任何自动化的
+# 入口 —— 全靠人记得在本地敲 `py -3 测试/跑全部.py`。
+# 一次「我记得跑过了」就可能把没验证的改动推上 main。
+#
+# 这个工作流只做一件事：**每次 push / PR 都真跑一遍全量回归**。
+# 不打包、不发版 —— 那是本地用 测试/打包Qt.py + 测试/发布Release.py 做的，
+# 需要 PyInstaller、几分钟时间和令牌，不适合塞进每次提交。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:      # 允许在 Actions 页面手动点一下重跑
+
+jobs:
+  全量回归:
+    # 必须是 Windows：测试里有 Win32 拖放（拖放.py 用 ctypes 调
+    # DragAcceptFiles）、路径大小写不敏感、以及大量中文文件名断言。
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: 跑全量回归
+        # offscreen：CI 机器没有交互式桌面，Qt 默认的 windows 平台插件
+        # 在这里起不来。测试本身不依赖真实渲染（截图证据是本地手动跑的）。
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: python -u 测试/跑全部.py
+
+      - name: 失败时留个日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 回归日志
+          path: |
+            **/*.log
+            **/*.txt
+          if-no-files-found: ignore
+          retention-days: 7

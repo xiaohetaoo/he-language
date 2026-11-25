@@ -36,7 +36,9 @@ def _打开程序():
 
 
 def _运行(命令):
-    结果 = subprocess.run(命令, capture_output=True, text=True, shell=False)
+    # assoc/ftype 正常毫秒级；reg 有时会卡在别处，给 60 秒足够。
+    结果 = subprocess.run(命令, capture_output=True, text=True, shell=False,
+                          timeout=60)
     return 结果.returncode, (结果.stdout or "") + (结果.stderr or "")
 
 

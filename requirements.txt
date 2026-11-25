@@ -1,0 +1,14 @@
+# 运行时依赖（CI 与本地都用这一份）
+#
+# **必须锁版本**：这个项目把 QSS、QProxyStyle 自绘、QPlainTextEdit 的折行/
+# 折叠区、以及 Qt 的字体度量用得很深，PySide6 大版本变化会改这些行为，
+# 而 README 里那句 `pip install PySide6` 拿到的是最新版 —— 同一份代码在
+# 不同人机器上跑出不同结果，排查时无从下手。
+#
+# 升级步骤：
+#   1. 改这里的版本号
+#   2. py -3 -m pip install -r requirements.txt
+#   3. py -3 测试/跑全部.py 必须 30/30
+#   4. py -3 测试/截图专项.py 看一眼 12/40 号两档的字号是否还对
+#   5. 把新版本号补进 版本记录.md
+PySide6-Essentials==6.12.0

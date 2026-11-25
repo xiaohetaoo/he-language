@@ -9,6 +9,8 @@
 
 import hashlib
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -123,40 +125,89 @@ def 安全打印(文本):
         print("".join(出).encode("ascii", "ignore").decode("ascii"))
 
 
+def 强行删(函数, 路径, _异常):
+    """Windows 上 git 对象的文件是只读的，直接 rmtree 删不掉。
+
+    参数说明（术语白话版）：`函数` 是 shutil 原本要执行的动作（删文件
+    或删空目录），`路径` 是卡住的那一项。先去掉只读属性再重试一次；
+    仍然失败就放弃，不让清理本身把回归判成失败。
+    """
+    try:
+        os.chmod(路径, stat.S_IWRITE)
+        函数(路径)
+    except OSError:
+        pass
+
+
 def 主():
     print("=" * 62)
     print("核工坊 · 全量回归测试")
     print("=" * 62)
+    # **所有测试的临时文件都关在这一只笼子里，跑完整只删掉。**
+    #
+    # 以前每项测试各自 mkdtemp 就不管了：一次回归能在 %TEMP% 里留几十个
+    # 目录，几十轮下来攒了一千多个（约定第 2 条明确要求每轮清临时文件）。
+    # 各测试脚本内部的 mkdtemp 没法逐个去改（46 个脚本），但 tempfile 认
+    # TEMP/TMP 环境变量，子进程会继承 —— 把整棵 temp 根指到这里，
+    # 它们建的目录就全落在笼子里，最后 rmtree 一次全清。
+    临时根 = tempfile.mkdtemp(prefix="核工坊回归根_")
     环境 = dict(os.environ)
     环境["PYTHONIOENCODING"] = "utf-8"
-    # 把配置目录指到临时目录：测试会改界面设置并写盘，若直接写到项目里，
-    # 跑一次回归就把用户真实的字号/制表宽/行号开关覆盖掉了
-    # （曾经把制表宽写成 2，导致下一次自测按「应为 4」失败）。
-    临时配置 = tempfile.mkdtemp(prefix="核工坊回归配置_")
-    环境["核工坊_配置目录"] = 临时配置
-    测前 = 目录指纹()
-    失败项 = []
-    for 名称, 脚本 in 测试集:
-        路径 = os.path.join(根目录, "测试", 脚本)
-        if not os.path.exists(路径):
-            print("\n--- %s：跳过（找不到 %s）" % (名称, 脚本))
-            continue
-        print("\n--- %s（%s）" % (名称, 脚本))
-        # 每个测试集用独立的配置目录，避免上一项改的设置影响下一项
-        环境["核工坊_配置目录"] = tempfile.mkdtemp(prefix="核工坊回归_")
-        结果 = subprocess.run(
-            [sys.executable, 路径], cwd=根目录, env=环境, capture_output=True
-        )
-        输出 = (结果.stdout or b"").decode("utf-8", "replace")
-        错误 = (结果.stderr or b"").decode("utf-8", "replace")
-        # unittest 把结果写在 stderr，所以两边都要看
-        合并 = (输出 + "\n" + 错误).strip()
-        # 只打印尾部若干行，前面太长的细节没必要刷屏
-        行 = [行 for 行 in 合并.splitlines() if 行.strip()]
-        for 行 in 行[-14:]:
-            安全打印("  " + 行)
-        if 结果.returncode != 0:
-            失败项.append(名称)
+    环境["TEMP"] = 环境["TMP"] = 环境["TMPDIR"] = 临时根
+    try:
+        # 把配置目录指到临时目录：测试会改界面设置并写盘，若直接写到项目里，
+        # 跑一次回归就把用户真实的字号/制表宽/行号开关覆盖掉了
+        # （曾经把制表宽写成 2，导致下一次自测按「应为 4」失败）。
+        临时配置 = os.path.join(临时根, "配置")
+        os.makedirs(临时配置, exist_ok=True)
+        环境["核工坊_配置目录"] = 临时配置
+        测前 = 目录指纹()
+        失败项 = []
+        for 序号, (名称, 脚本) in enumerate(测试集):
+            路径 = os.path.join(根目录, "测试", 脚本)
+            if not os.path.exists(路径):
+                print("\n--- %s：跳过（找不到 %s）" % (名称, 脚本))
+                continue
+            print("\n--- %s（%s）" % (名称, 脚本))
+            # 每个测试集用独立的配置目录，避免上一项改的设置影响下一项
+            环境["核工坊_配置目录"] = os.path.join(临时根, "配置_%02d" % 序号)
+            os.makedirs(环境["核工坊_配置目录"], exist_ok=True)
+             # **必须给超时**：任何一套测试挂住（对话框没关、子进程卡死）
+            # 都会让整个回归无限等待 —— 本地看不出进度，CI 里就是
+            # 跑到 6 小时上限被强杀，日志也留不下。
+            # 单套正常 1~10 秒，最慢的（打包/版本控制）也就半分钟，
+            # 10 分钟还没跑完一定是卡住了，直接判失败并写明是哪一套。
+            try:
+                结果 = subprocess.run(
+                    [sys.executable, 路径], cwd=根目录, env=环境,
+                    capture_output=True, timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                print("  !! 超时（>600 秒）：%s" % 名称)
+                print("     子进程可能卡在对话框或死循环上，手动跑一遍：")
+                print("     py -3 测试\\%s" % 脚本)
+                失败项.append(名称)
+                continue
+            输出 = (结果.stdout or b"").decode("utf-8", "replace")
+            错误 = (结果.stderr or b"").decode("utf-8", "replace")
+            # unittest 把结果写在 stderr，所以两边都要看
+            合并 = (输出 + "\n" + 错误).strip()
+            # 只打印尾部若干行，前面太长的细节没必要刷屏
+            行 = [行 for 行 in 合并.splitlines() if 行.strip()]
+            for 行 in 行[-14:]:
+                安全打印("  " + 行)
+            if 结果.returncode != 0:
+                失败项.append(名称)
+        测后 = 目录指纹()
+    finally:
+        # 不管成功失败都清笼子；清不掉也不该把回归判成失败（文件可能还被
+        # 某个刚退出的子进程短暂占用），只提示一句。
+        try:
+            shutil.rmtree(临时根, onerror=强行删)
+        except Exception:  # noqa: BLE001
+            pass
+        if os.path.exists(临时根):
+            print("\n（提示：临时目录没能完全删掉，可手动清 %s）" % 临时根)
 
     print("\n--- 源码树有没有被测试写脏 ---")
     测后 = 目录指纹()

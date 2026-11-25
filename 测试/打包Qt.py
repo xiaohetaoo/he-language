@@ -66,7 +66,9 @@ def 确保图标():
         print("缺少图标：%s" % "、".join(缺))
         return False
     print("图标不全，正在生成…")
-    return subprocess.run([找解释器(), 生成], cwd=根目录).returncode == 0
+    # 生成图标正常 1~2 秒；卡住说明资源脚本有问题，别让它拖死打包。
+    return subprocess.run([找解释器(), 生成], cwd=根目录,
+                          timeout=120).returncode == 0
 
 
 def 跑回归():
@@ -78,7 +80,10 @@ def 跑回归():
     print("\n先跑一遍全部回归测试…")
     环境 = dict(os.environ)
     环境["PYTHONIOENCODING"] = "utf-8"
-    结果 = subprocess.run([找解释器(), 脚本], cwd=根目录, env=环境)
+    # 这一步会**再跑一遍全量回归**（30 套）。回归本身有 10 分钟/套的
+    # 超时，这里再兜一层 30 分钟总闸，防止某个子进程脱离监管。
+    结果 = subprocess.run([找解释器(), 脚本], cwd=根目录, env=环境,
+                          timeout=1800)
     return 结果.returncode == 0
 
 
@@ -163,7 +168,9 @@ def 主():
     命令.append(入口)
 
     print("执行：\n  " + " \\\n  ".join(命令))
-    结果 = subprocess.run(命令, cwd=根目录)
+    # PyInstaller 冷构建实测 2~4 分钟；首次还要下载/解压，给足 30 分钟。
+    # 不给的话，一旦它卡在某个 hidden import 上，打包流程会永远停住。
+    结果 = subprocess.run(命令, cwd=根目录, timeout=1800)
     if 结果.returncode != 0:
         print("打包失败，返回码 %s" % 结果.returncode)
         return 结果.returncode

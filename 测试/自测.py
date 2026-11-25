@@ -700,6 +700,9 @@ class 运行测试(unittest.TestCase):
             input=(输入 or "").encode("utf-8"),
             capture_output=True,
             cwd=self.目录,
+            # 内核跑一个测试文件正常几十毫秒；卡住多半是等 stdin，
+            # 而不给超时的话这类用例会把整个测试进程挂死。
+            timeout=120,
         )
         return (
             结果.returncode,
@@ -767,7 +770,8 @@ class 运行测试(unittest.TestCase):
         with open(路径, "w", encoding="utf-8") as f:
             f.write('核说（breakpoint（1））\n核说（"x".format_map（））\n')
         for _ in range(2):
-            subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
+            subprocess.run([解释器, 内核脚本, 路径], capture_output=True,
+                           cwd=self.目录, timeout=120)
         清单 = os.path.join(self.目录, "未定义.txt")
         self.assertTrue(os.path.exists(清单))
         with open(清单, encoding="utf-8") as f:
@@ -780,7 +784,8 @@ class 运行测试(unittest.TestCase):
         路径 = os.path.join(self.目录, "多处.xht")
         with open(路径, "w", encoding="utf-8") as f:
             f.write('核说（breakpoint（1））\n核说（breakpoint（2））\n')
-        subprocess.run([解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录)
+        subprocess.run([解释器, 内核脚本, 路径], capture_output=True,
+                       cwd=self.目录, timeout=120)
         清单 = os.path.join(self.目录, "未定义.txt")
         with open(清单, encoding="utf-8") as f:
             内容 = f.read()
@@ -794,7 +799,8 @@ class 运行测试(unittest.TestCase):
         with open(路径, "w", encoding="utf-8") as f:
             f.write("核说（1）\n")
         结果 = subprocess.run(
-            [解释器, 内核脚本, "检查", 路径], capture_output=True, cwd=self.目录
+            [解释器, 内核脚本, "检查", 路径], capture_output=True,
+            cwd=self.目录, timeout=120,
         )
         self.assertEqual(结果.returncode, 0)
         self.assertIn("检查通过", 结果.stdout.decode("utf-8", "replace"))
@@ -827,6 +833,7 @@ class 运行测试(unittest.TestCase):
         结果 = subprocess.run(
             [解释器, 内核脚本, 路径], capture_output=True, cwd=self.目录,
             env=dict(os.environ, PYTHONIOENCODING="", PYTHONUTF8="0"),
+            timeout=120,
         )
         输出 = 结果.stdout
         # 「核语言」的 UTF-8 字节是 e6a0 b8 e8af ad e8a8 80
@@ -849,6 +856,7 @@ class 示例测试(unittest.TestCase):
                     input=b"85\n",
                     capture_output=True,
                     cwd=根目录,
+                    timeout=120,     # 等 stdin 的用例最怕无超时
                 )
                 self.assertEqual(
                     结果.returncode,

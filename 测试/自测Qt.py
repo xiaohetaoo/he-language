@@ -25,6 +25,26 @@ import 配置
 失败 = []
 
 
+def 等条件(判定, 最长=8.0, 步=0.01):
+    """反复转事件循环，直到 判定() 为真或超时。返回判定() 的最终结果。
+
+    **不要写成「睡固定 0.8 秒再断言」**：进程清理、管道收尾这类事情
+    在忙的机器上会慢一倍以上，固定等待就是假失败的来源；
+    空闲时又白等。这里条件一到就走，最多等到 最长 秒。
+    """
+    窗 = QApplication.instance()
+    截止 = time.time() + 最长
+    while time.time() < 截止:
+        if 窗 is not None:
+            窗.processEvents()
+        if 判定():
+            return True
+        time.sleep(步)
+    if 窗 is not None:
+        窗.processEvents()
+    return 判定()
+
+
 def 检查(条件, 说明):
     if 条件:
         print("  ok   %s" % 说明)
@@ -103,9 +123,7 @@ def 主():
         time.sleep(0.02)
     检查(窗.进程 is not None, "程序在运行")
     窗.停止()
-    for _ in range(40):
-        应用.processEvents()
-        time.sleep(0.02)
+    等条件(lambda: 窗.进程 is None)
     检查(窗.进程 is None, "停止后进程已清理")
     检查("[已停止]" in 窗.控制台.toPlainText(), "控制台显示已停止")
 
@@ -125,9 +143,8 @@ def 主():
     with warnings.catch_warnings(record=True) as 收到的警告:
         warnings.simplefilter("always", ResourceWarning)
         窗.停止()
-        for _ in range(30):
-            应用.processEvents()
-            time.sleep(0.02)
+        等条件(lambda: 窗.进程 is None, 最长=5.0)
+        应用.processEvents()
         gc.collect()
     子进程警告 = [w for w in 收到的警告
                   if issubclass(w.category, ResourceWarning)
@@ -153,9 +170,9 @@ def 主():
         time.sleep(0.01)
         if 窗.进程 is None or 窗.进程.poll() is not None:
             break
-    for _ in range(80):
-        应用.processEvents()
-        time.sleep(0.02)
+    # 进程已经退了，但读线程把最后几块交出去还要一点时间；
+    # 条件用「已经收满 40000 个」代替固定 1.6 秒的等待。
+    等条件(lambda: 窗.控制台.toPlainText().count("核语言") >= 40000, 最长=15.0)
     巨文 = 窗.控制台.toPlainText()
     检查("\ufffd" not in 巨文, "大段中文输出没有替换符（增量解码）")
     检查(巨文.count("核语言") == 40000,
