@@ -8,6 +8,12 @@ name: 回归测试
 # 这个工作流只做一件事：**每次 push / PR 都真跑一遍全量回归**。
 # 不打包、不发版 —— 那是本地用 测试/打包Qt.py + 测试/发布Release.py 做的，
 # 需要 PyInstaller、几分钟时间和令牌，不适合塞进每次提交。
+#
+# ⚠️ **job 的键名必须是 ASCII**（字母/数字/`_`/`-`，且以字母或 `_` 开头）。
+# 第一版写的是 `全量回归:`，GitHub 把它存成 active 却永远跑不起来：
+# `gh workflow run` 直接报 422 "The identifier '全量回归' is invalid"，
+# 而 push 触发的运行数一直是 0 —— 表面有 CI，实际一条都没跑过。
+# 中文只能出现在 `name:` 这类**显示用**字段里。
 
 on:
   push:
@@ -17,7 +23,8 @@ on:
   workflow_dispatch:      # 允许在 Actions 页面手动点一下重跑
 
 jobs:
-  全量回归:
+  regression:
+    name: 全量回归（windows-latest）
     # 必须是 Windows：测试里有 Win32 拖放（拖放.py 用 ctypes 调
     # DragAcceptFiles）、路径大小写不敏感、以及大量中文文件名断言。
     runs-on: windows-latest
@@ -48,7 +55,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: 回归日志
+          name: regression-log
           path: |
             **/*.log
             **/*.txt
